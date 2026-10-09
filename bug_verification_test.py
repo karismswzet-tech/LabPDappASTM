@@ -22,7 +22,7 @@ from PIL import Image
 import os
 
 # Backend URL from frontend/.env
-BASE_URL = "https://landing-page-web-3.preview.emergentagent.com/api"
+BASE_URL = "https://webapp-astm2.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 USERNAME = "admin"

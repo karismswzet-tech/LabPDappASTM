@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Configuration
-BASE_URL = "https://landing-page-web-3.preview.emergentagent.com/api"
+BASE_URL = "https://webapp-astm2.preview.emergentagent.com/api"
 USERNAME = "admin"
 PASSWORD = "admin123"
 

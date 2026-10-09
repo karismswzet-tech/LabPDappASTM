@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Load backend URL from frontend .env
 env_file = Path("/app/frontend/.env")
-BACKEND_URL = "https://landing-page-web-3.preview.emergentagent.com"
+BACKEND_URL = "https://webapp-astm2.preview.emergentagent.com"
 if env_file.exists():
     for line in env_file.read_text().splitlines():
         if line.startswith("REACT_APP_BACKEND_URL="):
