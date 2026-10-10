@@ -58,6 +58,13 @@ import HumidityHistory from "@/pages/humidity/History";
 import HumidityTrend from "@/pages/humidity/Trend";
 import HumidityResult from "@/pages/humidity/Result";
 import HumidityScale from "@/pages/humidity/Scale";
+import DipLayout from "@/pages/diptest/DipLayout";
+import DipDashboard from "@/pages/diptest/Dashboard";
+import DipNewTest from "@/pages/diptest/NewTest";
+import DipHistory from "@/pages/diptest/History";
+import DipTrend from "@/pages/diptest/Trend";
+import DipResult from "@/pages/diptest/Result";
+import DipScale from "@/pages/diptest/Scale";
 
 function App() {
   return (
@@ -128,6 +135,14 @@ function App() {
                 <Route path="grid-scale" element={<HumidityScale />} />
               </Route>
               <Route path="/humidity-cabinet/result/:id" element={<HumidityResult />} />
+              <Route path="/dip-test" element={<DipLayout />}>
+                <Route index element={<DipDashboard />} />
+                <Route path="new" element={<DipNewTest />} />
+                <Route path="history" element={<DipHistory />} />
+                <Route path="trend" element={<DipTrend />} />
+                <Route path="grid-scale" element={<DipScale />} />
+              </Route>
+              <Route path="/dip-test/result/:id" element={<DipResult />} />
               <Route path="/:module" element={<ModulePage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

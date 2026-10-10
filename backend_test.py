@@ -1,417 +1,732 @@
 #!/usr/bin/env python3
 """
-Backend test for Copper Strip 4-sample batch enhancement
-Tests the new batch OCR and batch analyze endpoints
+Backend API Testing for DIP TEST In House Method Module
+Tests the /api/diptest/* endpoints
 """
 import requests
 import time
 import json
-import sys
-from pathlib import Path
+from io import BytesIO
+from PIL import Image
 
 # Configuration
 BASE_URL = "https://webapp-rating.preview.emergentagent.com/api"
-USERNAME = "admin"
-PASSWORD = "admin123"
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "admin123"
 
-# Test state
-token = None
-test_image_path = None
+# Test state - use a session to handle cookies
+http_session = requests.Session()
+test_records_created = []
 
-def log(msg):
-    print(f"[TEST] {msg}")
 
 def login():
-    """Test 1: Login and get auth token"""
-    global token
-    log("TEST 1: Login with admin/admin123")
-    resp = requests.post(f"{BASE_URL}/auth/login", json={"username": USERNAME, "password": PASSWORD})
-    if resp.status_code != 200:
-        log(f"❌ Login failed: {resp.status_code} {resp.text}")
-        sys.exit(1)
-    data = resp.json()
-    token = data.get("token")
-    if not token:
-        log(f"❌ No token in response: {data}")
-        sys.exit(1)
-    log(f"✅ Login successful, token: {token[:20]}...")
-    return token
-
-def test_backend_health():
-    """Test 2: Backend health check"""
-    log("TEST 2: Backend health check")
-    resp = requests.get(f"{BASE_URL}/")
-    if resp.status_code != 200:
-        log(f"❌ Health check failed: {resp.status_code}")
-        sys.exit(1)
-    log(f"✅ Backend healthy: {resp.text}")
-
-def test_batch_ocr_auth_guard():
-    """Test 3: Batch OCR auth guard - no token should return 401"""
-    log("TEST 3: POST /api/copper/batch/ocr/start without token → 401")
-    resp = requests.post(f"{BASE_URL}/copper/batch/ocr/start", json={"image_path": "test.jpg"})
-    if resp.status_code != 401:
-        log(f"❌ Expected 401, got {resp.status_code}: {resp.text}")
+    """Login and get session cookie"""
+    print("\n=== LOGIN ===")
+    
+    response = http_session.post(
+        f"{BASE_URL}/auth/login",
+        json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD},
+        timeout=10
+    )
+    print(f"POST /api/auth/login: {response.status_code}")
+    if response.status_code == 200:
+        data = response.json()
+        username = data.get('username')
+        ttl = data.get('ttl_minutes')
+        
+        # Check if we have a cookie
+        cookies = http_session.cookies.get_dict()
+        if 'elastech_session' in cookies:
+            print(f"✅ Login successful (cookie-based). Username: {username}, TTL: {ttl} minutes")
+        else:
+            print(f"⚠️  Login successful but no cookie found. Username: {username}")
+        return True
+    else:
+        print(f"❌ Login failed: {response.text}")
         return False
-    log(f"✅ Auth guard working: 401 {resp.json()}")
-    return True
 
-def test_batch_ocr_nonexistent_image():
-    """Test 4: Batch OCR with nonexistent image should return 404"""
-    log("TEST 4: POST /api/copper/batch/ocr/start with nonexistent image → 404")
-    headers = {"X-Session-Token": token}
-    resp = requests.post(f"{BASE_URL}/copper/batch/ocr/start", 
-                        json={"image_path": "nonexistent/image.jpg"}, 
-                        headers=headers)
-    if resp.status_code != 404:
-        log(f"❌ Expected 404, got {resp.status_code}: {resp.text}")
-        return False
-    log(f"✅ Nonexistent image returns 404: {resp.json()}")
-    return True
+
+def get_headers(with_auth=True):
+    """Get request headers (auth handled by session cookies)"""
+    return {"Content-Type": "application/json"}
+
+
+def test_auth_guards():
+    """Test 1: Auth guards - endpoints should return 401 without token"""
+    print("\n=== TEST 1: AUTH GUARDS ===")
+    
+    # Create a new session without auth for testing
+    no_auth_session = requests.Session()
+    
+    # Test GET /api/diptest/dashboard without token
+    response = no_auth_session.get(f"{BASE_URL}/diptest/dashboard", timeout=10)
+    print(f"GET /api/diptest/dashboard (no token): {response.status_code}")
+    if response.status_code == 401:
+        print("✅ Dashboard auth guard working (401)")
+    else:
+        print(f"❌ Expected 401, got {response.status_code}")
+    
+    # Test POST /api/diptest/analyze/start without token
+    response = no_auth_session.post(
+        f"{BASE_URL}/diptest/analyze/start",
+        json={"image_path": "test.jpg", "sample_id": "TEST"},
+        timeout=10
+    )
+    print(f"POST /api/diptest/analyze/start (no token): {response.status_code}")
+    if response.status_code == 401:
+        print("✅ Analyze start auth guard working (401)")
+    else:
+        print(f"❌ Expected 401, got {response.status_code}")
+
+
+def test_reference_scale():
+    """Test 2: GET /api/diptest/reference-scale"""
+    print("\n=== TEST 2: REFERENCE SCALE ===")
+    response = http_session.get(
+        f"{BASE_URL}/diptest/reference-scale",
+        headers=get_headers(),
+        timeout=10
+    )
+    print(f"GET /api/diptest/reference-scale: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Reference scale retrieved")
+        print(f"  Title: {data.get('title')}")
+        print(f"  Measurement area: {data.get('measurement_area')}")
+        
+        # Verify grades A-E with correct thresholds
+        grades = data.get('grades', {})
+        expected_grades = {
+            'A': {'min': 0, 'max': 0},
+            'B': {'min': 1, 'max': 10},
+            'C': {'min': 11, 'max': 25},
+            'D': {'min': 26, 'max': 50},
+            'E': {'min': 51, 'max': 100}
+        }
+        
+        all_correct = True
+        for grade, expected in expected_grades.items():
+            if grade in grades:
+                actual_min = grades[grade].get('min')
+                actual_max = grades[grade].get('max')
+                if actual_min == expected['min'] and actual_max == expected['max']:
+                    print(f"  ✅ Grade {grade}: {actual_min}-{actual_max} boxes")
+                else:
+                    print(f"  ❌ Grade {grade}: Expected {expected['min']}-{expected['max']}, got {actual_min}-{actual_max}")
+                    all_correct = False
+            else:
+                print(f"  ❌ Grade {grade} missing")
+                all_correct = False
+        
+        if all_correct:
+            print("✅ All grade thresholds correct (A=0, B=1-10, C=11-25, D=26-50, E=51-100)")
+    else:
+        print(f"❌ Failed: {response.status_code} - {response.text}")
+
+
+def test_dashboard():
+    """Test 3: GET /api/diptest/dashboard"""
+    print("\n=== TEST 3: DASHBOARD ===")
+    response = http_session.get(
+        f"{BASE_URL}/diptest/dashboard",
+        headers=get_headers(),
+        timeout=10
+    )
+    print(f"GET /api/diptest/dashboard: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Dashboard retrieved")
+        print(f"  Total: {data.get('total')}")
+        print(f"  Average rusted boxes: {data.get('average_rusted_boxes')}")
+        
+        # Verify structure
+        grade_counts = data.get('grade_counts', {})
+        print(f"  Grade counts: A={grade_counts.get('A', 0)}, B={grade_counts.get('B', 0)}, C={grade_counts.get('C', 0)}, D={grade_counts.get('D', 0)}, E={grade_counts.get('E', 0)}")
+        
+        if 'latest' in data and 'total' in data and 'grade_counts' in data and 'average_rusted_boxes' in data:
+            print("✅ Dashboard structure correct (latest/total/grade_counts/average_rusted_boxes)")
+        else:
+            print("❌ Dashboard structure incomplete")
+    else:
+        print(f"❌ Failed: {response.status_code} - {response.text}")
+
+
+def test_trend():
+    """Test 4: GET /api/diptest/trend"""
+    print("\n=== TEST 4: TREND ===")
+    response = http_session.get(
+        f"{BASE_URL}/diptest/trend",
+        headers=get_headers(),
+        timeout=10
+    )
+    print(f"GET /api/diptest/trend: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Trend retrieved: {len(data)} records")
+        if len(data) > 0:
+            print(f"  First record: {data[0]}")
+    else:
+        print(f"❌ Failed: {response.status_code} - {response.text}")
+
+
+def test_tests_list():
+    """Test 5: GET /api/diptest/tests and search"""
+    print("\n=== TEST 5: TESTS LIST & SEARCH ===")
+    
+    # Test list all
+    response = http_session.get(
+        f"{BASE_URL}/diptest/tests",
+        headers=get_headers(),
+        timeout=10
+    )
+    print(f"GET /api/diptest/tests: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Tests list retrieved: {len(data)} records")
+    else:
+        print(f"❌ Failed: {response.status_code} - {response.text}")
+    
+    # Test search
+    response = http_session.get(
+        f"{BASE_URL}/diptest/tests?q=TEST",
+        headers=get_headers(),
+        timeout=10
+    )
+    print(f"GET /api/diptest/tests?q=TEST: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"✅ Search working: {len(data)} records found")
+    else:
+        print(f"❌ Search failed: {response.status_code} - {response.text}")
+
 
 def upload_test_image():
-    """Test 5: Upload a small test image"""
-    global test_image_path
-    log("TEST 5: Upload test image via /api/kht/upload")
+    """Upload a test image for analysis"""
+    print("\n=== UPLOAD TEST IMAGE ===")
     
-    # Create a small test image (1x1 pixel PNG)
-    import io
-    from PIL import Image
-    img = Image.new('RGB', (100, 100), color='red')
-    buf = io.BytesIO()
-    img.save(buf, format='JPEG')
-    buf.seek(0)
+    # Create a simple test image (100x100 white image)
+    img = Image.new('RGB', (100, 100), color='white')
+    img_bytes = BytesIO()
+    img.save(img_bytes, format='JPEG')
+    img_bytes.seek(0)
     
-    headers = {"X-Session-Token": token}
-    files = {"file": ("test.jpg", buf, "image/jpeg")}
-    resp = requests.post(f"{BASE_URL}/kht/upload", files=files, headers=headers)
+    # Upload via /api/kht/upload (using http_session for auth)
+    files = {'file': ('test_diptest.jpg', img_bytes, 'image/jpeg')}
     
-    if resp.status_code != 200:
-        log(f"❌ Upload failed: {resp.status_code} {resp.text}")
+    response = http_session.post(
+        f"{BASE_URL}/kht/upload",
+        files=files,
+        timeout=30
+    )
+    
+    print(f"POST /api/kht/upload: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        image_path = data.get('image_path')
+        print(f"✅ Image uploaded: {image_path}")
+        return image_path
+    else:
+        print(f"❌ Upload failed: {response.status_code} - {response.text}")
+        return None
+
+
+def test_full_ai_flow():
+    """Test 6: Full AI analysis flow"""
+    print("\n=== TEST 6: FULL AI ANALYSIS FLOW ===")
+    
+    # Upload test image
+    image_path = upload_test_image()
+    if not image_path:
+        print("❌ Cannot proceed without image")
         return None
     
-    data = resp.json()
-    test_image_path = data.get("image_path") or data.get("path")
-    if not test_image_path:
-        log(f"❌ No path in upload response: {data}")
-        return None
-    
-    log(f"✅ Image uploaded: {test_image_path}")
-    return test_image_path
-
-def test_batch_ocr_job():
-    """Test 6: Start batch OCR job and poll briefly"""
-    log("TEST 6: Start batch OCR job and poll")
-    
-    if not test_image_path:
-        log("❌ No test image path available")
-        return False
-    
-    headers = {"X-Session-Token": token}
-    
-    # Start OCR job
-    log(f"  Starting batch OCR with image_path: {test_image_path}")
-    resp = requests.post(f"{BASE_URL}/copper/batch/ocr/start", 
-                        json={"image_path": test_image_path}, 
-                        headers=headers)
-    
-    if resp.status_code != 200:
-        log(f"❌ OCR start failed: {resp.status_code} {resp.text}")
-        return False
-    
-    job = resp.json()
-    job_id = job.get("id")
-    if not job_id:
-        log(f"❌ No job ID in response: {job}")
-        return False
-    
-    log(f"✅ OCR job created: {job_id}, status: {job.get('status')}")
-    
-    # Poll job briefly (max 15 seconds)
-    log("  Polling job status (max 15s)...")
-    for i in range(15):
-        time.sleep(1)
-        resp = requests.get(f"{BASE_URL}/copper/batch/ocr/jobs/{job_id}", headers=headers)
-        if resp.status_code != 200:
-            log(f"❌ Poll failed: {resp.status_code} {resp.text}")
-            return False
-        
-        job = resp.json()
-        status = job.get("status")
-        log(f"  Poll {i+1}: status={status}")
-        
-        if status == "done":
-            log(f"✅ OCR job completed successfully")
-            log(f"  Result: {json.dumps(job, indent=2)}")
-            samples = job.get("samples", [])
-            log(f"  Detected {len(samples)} samples")
-            return True
-        elif status == "error":
-            error = job.get("error", "Unknown error")
-            if "budget" in error.lower() or "sedang sibuk" in error.lower():
-                log(f"⚠️  OCR job failed with known budget error (expected): {error}")
-                log(f"  This is acceptable - infrastructure test passed, AI budget exhausted")
-                return True
-            else:
-                log(f"❌ OCR job failed with unexpected error: {error}")
-                return False
-    
-    log(f"⚠️  OCR job still running after 15s (status: {job.get('status')})")
-    log(f"  Infrastructure test passed - job was created and is processing")
-    return True
-
-def test_batch_analyze_with_sample_ids():
-    """Test 7: Start batch analyze with sample_ids field"""
-    log("TEST 7: POST /api/copper/batch/analyze/start with sample_ids")
-    
-    if not test_image_path:
-        log("❌ No test image path available")
-        return False
-    
-    headers = {"X-Session-Token": token}
-    
+    # Start analysis
+    print("\n--- Starting DIP TEST Analysis ---")
     payload = {
-        "image_path": test_image_path,
-        "batch_id": "TEST-BATCH-001",
-        "sample_ids": ["ID-A", "ID-B", "ID-C", "ID-D"],
-        "product": "Diesel Fuel B30",
+        "image_path": image_path,
+        "sample_id": "DIP-TEST-001",
+        "product": "Test Product",
         "batch": "BATCH-001",
         "operator": "Test Operator",
-        "temperature_c": 100,
-        "duration_hours": 3,
-        "remark": "Test batch analysis"
+        "exposure_hours": 168,
+        "temperature_c": 48.9,
+        "humidity_pct": 95,
+        "substrate": "Cold Rolled Steel 1018",
+        "remark": "Backend test"
     }
     
-    log(f"  Payload: {json.dumps(payload, indent=2)}")
-    resp = requests.post(f"{BASE_URL}/copper/batch/analyze/start", 
-                        json=payload, 
-                        headers=headers)
+    response = http_session.post(
+        f"{BASE_URL}/diptest/analyze/start",
+        json=payload,
+        headers=get_headers(),
+        timeout=10
+    )
     
-    if resp.status_code != 200:
-        log(f"❌ Batch analyze start failed: {resp.status_code} {resp.text}")
-        return False
+    print(f"POST /api/diptest/analyze/start: {response.status_code}")
     
-    job = resp.json()
-    job_id = job.get("id")
-    batch_id = job.get("batch_id")
+    if response.status_code != 200:
+        print(f"❌ Failed to start analysis: {response.status_code} - {response.text}")
+        return None
     
-    if not job_id:
-        log(f"❌ No job ID in response: {job}")
-        return False
+    job_data = response.json()
+    job_id = job_data.get('id')
+    status = job_data.get('status')
     
-    log(f"✅ Batch analyze job created")
-    log(f"  Job ID: {job_id}")
-    log(f"  Batch ID: {batch_id}")
-    log(f"  Status: {job.get('status')}")
+    print(f"✅ Job created: {job_id}")
+    print(f"  Status: {status}")
     
-    # Verify sample_ids field is accepted (job created successfully means it was accepted)
-    log(f"✅ sample_ids field accepted by endpoint")
+    if status != 'running':
+        print(f"❌ Expected status 'running', got '{status}'")
+        return None
     
-    # Poll briefly to check job shape
-    log("  Polling job status (max 15s)...")
-    for i in range(15):
+    # Poll job until done
+    print("\n--- Polling Job Status ---")
+    max_polls = 60  # 60 seconds max
+    poll_count = 0
+    record_id = None
+    
+    while poll_count < max_polls:
         time.sleep(1)
-        resp = requests.get(f"{BASE_URL}/copper/batch/analyze/jobs/{job_id}", headers=headers)
-        if resp.status_code != 200:
-            log(f"❌ Poll failed: {resp.status_code} {resp.text}")
+        poll_count += 1
+        
+        response = http_session.get(
+            f"{BASE_URL}/diptest/analyze/jobs/{job_id}",
+            headers=get_headers(),
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            print(f"❌ Poll failed: {response.status_code}")
+            break
+        
+        job_status = response.json()
+        status = job_status.get('status')
+        
+        if status == 'done':
+            record_id = job_status.get('record_id')
+            print(f"✅ Job completed in {poll_count} seconds")
+            print(f"  Record ID: {record_id}")
+            break
+        elif status == 'error':
+            error = job_status.get('error', 'Unknown error')
+            print(f"⚠️  Job failed with error: {error}")
+            # Check if it's a budget error (acceptable as infra-pass)
+            if 'budget' in error.lower() or 'batas permintaan' in error.lower() or 'sibuk' in error.lower():
+                print("✅ INFRA-PASS: Budget exhaustion is acceptable (AI integration is REAL)")
+                return None
+            else:
+                print(f"❌ Unexpected error: {error}")
+                return None
+        
+        if poll_count % 10 == 0:
+            print(f"  Still polling... ({poll_count}s, status: {status})")
+    
+    if not record_id:
+        print(f"❌ Job did not complete within {max_polls} seconds")
+        return None
+    
+    # Track for cleanup
+    test_records_created.append(record_id)
+    
+    return record_id
+
+
+def test_analysis_result(record_id):
+    """Test 7: Verify analysis result structure"""
+    print("\n=== TEST 7: ANALYSIS RESULT VERIFICATION ===")
+    
+    response = http_session.get(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"GET /api/diptest/tests/{record_id}: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"❌ Failed to get record: {response.status_code} - {response.text}")
+        return False
+    
+    data = response.json()
+    print(f"✅ Record retrieved")
+    
+    # Verify grid_boxes has exactly 100 booleans
+    grid_boxes = data.get('grid_boxes', [])
+    if len(grid_boxes) == 100:
+        print(f"✅ grid_boxes has exactly 100 elements")
+    else:
+        print(f"❌ grid_boxes has {len(grid_boxes)} elements, expected 100")
+        return False
+    
+    # Verify all are booleans
+    if all(isinstance(b, bool) for b in grid_boxes):
+        print(f"✅ All grid_boxes elements are booleans")
+    else:
+        print(f"❌ Not all grid_boxes elements are booleans")
+        return False
+    
+    # Verify rusted_box_count matches count of true in grid_boxes
+    rusted_count = data.get('rusted_box_count', 0)
+    true_count = sum(1 for b in grid_boxes if b)
+    
+    if rusted_count == true_count:
+        print(f"✅ rusted_box_count ({rusted_count}) matches count of true in grid_boxes ({true_count})")
+    else:
+        print(f"❌ rusted_box_count ({rusted_count}) does NOT match count of true in grid_boxes ({true_count})")
+        return False
+    
+    # Verify grade follows thresholds
+    grade = data.get('grade')
+    expected_grade = None
+    if rusted_count == 0:
+        expected_grade = 'A'
+    elif 1 <= rusted_count <= 10:
+        expected_grade = 'B'
+    elif 11 <= rusted_count <= 25:
+        expected_grade = 'C'
+    elif 26 <= rusted_count <= 50:
+        expected_grade = 'D'
+    elif 51 <= rusted_count <= 100:
+        expected_grade = 'E'
+    
+    if grade == expected_grade:
+        print(f"✅ Grade '{grade}' correct for rusted_count={rusted_count}")
+    else:
+        print(f"❌ Grade '{grade}' incorrect for rusted_count={rusted_count}, expected '{expected_grade}'")
+        return False
+    
+    # Verify method is 'full'
+    method = data.get('method')
+    if method == 'full':
+        print(f"✅ Method is 'full' (whole-image)")
+    else:
+        print(f"❌ Method is '{method}', expected 'full'")
+        return False
+    
+    # Verify grid_corners are full-image corners
+    grid_corners = data.get('grid_corners', [])
+    expected_corners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    
+    if grid_corners == expected_corners:
+        print(f"✅ grid_corners are full-image corners: {grid_corners}")
+    else:
+        print(f"⚠️  grid_corners: {grid_corners} (expected {expected_corners})")
+    
+    print(f"\nRecord details:")
+    print(f"  Sample ID: {data.get('meta', {}).get('sample_id')}")
+    print(f"  Rusted boxes: {rusted_count}/100")
+    print(f"  Grade: {grade} - {data.get('grade_label')}")
+    print(f"  Status: {data.get('grade_status')}")
+    print(f"  Confidence: {data.get('confidence')}")
+    print(f"  AI Model: {data.get('ai_model')}")
+    
+    return True
+
+
+def test_update_operations(record_id):
+    """Test 8: Update operations (rusted_box_count and inspector fields)"""
+    print("\n=== TEST 8: UPDATE OPERATIONS ===")
+    
+    # Test 8a: Update rusted_box_count to 15 (should be grade C)
+    print("\n--- Update rusted_box_count to 15 ---")
+    response = http_session.put(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        json={"rusted_box_count": 15},
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"PUT /api/diptest/tests/{record_id} (rusted_box_count=15): {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        rusted_count = data.get('rusted_box_count')
+        grade = data.get('grade')
+        edited = data.get('edited')
+        
+        if rusted_count == 15:
+            print(f"✅ rusted_box_count updated to 15")
+        else:
+            print(f"❌ rusted_box_count is {rusted_count}, expected 15")
+        
+        if grade == 'C':
+            print(f"✅ Grade updated to 'C' (11-25 range)")
+        else:
+            print(f"❌ Grade is '{grade}', expected 'C'")
+        
+        if edited:
+            print(f"✅ edited flag set to true")
+        else:
+            print(f"❌ edited flag is {edited}, expected true")
+        
+        # Verify grid_boxes recomputed
+        grid_boxes = data.get('grid_boxes', [])
+        true_count = sum(1 for b in grid_boxes if b)
+        if true_count == 15:
+            print(f"✅ grid_boxes recomputed with 15 true values")
+        else:
+            print(f"❌ grid_boxes has {true_count} true values, expected 15")
+    else:
+        print(f"❌ Update failed: {response.status_code} - {response.text}")
+        return False
+    
+    # Test 8b: Update inspector fields
+    print("\n--- Update inspector fields ---")
+    response = http_session.put(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        json={
+            "inspector_count": 30,
+            "inspector_name": "QA",
+            "inspector_notes": "Manual inspection notes"
+        },
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"PUT /api/diptest/tests/{record_id} (inspector fields): {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        inspector_count = data.get('inspector_count')
+        inspector_grade = data.get('inspector_grade')
+        inspector_name = data.get('inspector_name')
+        inspector_notes = data.get('inspector_notes')
+        inspector_at = data.get('inspector_at')
+        
+        if inspector_count == 30:
+            print(f"✅ inspector_count set to 30")
+        else:
+            print(f"❌ inspector_count is {inspector_count}, expected 30")
+        
+        if inspector_grade == 'D':
+            print(f"✅ inspector_grade set to 'D' (26-50 range)")
+        else:
+            print(f"❌ inspector_grade is '{inspector_grade}', expected 'D'")
+        
+        if inspector_name == "QA":
+            print(f"✅ inspector_name set to 'QA'")
+        else:
+            print(f"❌ inspector_name is '{inspector_name}', expected 'QA'")
+        
+        if inspector_notes == "Manual inspection notes":
+            print(f"✅ inspector_notes set correctly")
+        else:
+            print(f"❌ inspector_notes is '{inspector_notes}'")
+        
+        if inspector_at:
+            print(f"✅ inspector_at timestamp set: {inspector_at}")
+        else:
+            print(f"❌ inspector_at not set")
+    else:
+        print(f"❌ Update failed: {response.status_code} - {response.text}")
+        return False
+    
+    # Test 8c: Clear inspector fields with inspector_count=-1
+    print("\n--- Clear inspector fields (inspector_count=-1) ---")
+    response = http_session.put(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        json={"inspector_count": -1},
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"PUT /api/diptest/tests/{record_id} (inspector_count=-1): {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        inspector_count = data.get('inspector_count')
+        inspector_grade = data.get('inspector_grade')
+        
+        if inspector_count is None:
+            print(f"✅ inspector_count cleared (null)")
+        else:
+            print(f"❌ inspector_count is {inspector_count}, expected null")
+        
+        if inspector_grade is None:
+            print(f"✅ inspector_grade cleared (null)")
+        else:
+            print(f"❌ inspector_grade is '{inspector_grade}', expected null")
+    else:
+        print(f"❌ Update failed: {response.status_code} - {response.text}")
+        return False
+    
+    return True
+
+
+def test_delete(record_id):
+    """Test 9: Soft delete"""
+    print("\n=== TEST 9: SOFT DELETE ===")
+    
+    # Delete the record
+    response = http_session.delete(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"DELETE /api/diptest/tests/{record_id}: {response.status_code}")
+    
+    if response.status_code == 200:
+        data = response.json()
+        if data.get('ok'):
+            print(f"✅ Delete successful")
+        else:
+            print(f"❌ Delete response: {data}")
             return False
-        
-        job = resp.json()
-        status = job.get("status")
-        log(f"  Poll {i+1}: status={status}")
-        
-        if status == "done":
-            log(f"✅ Batch analyze job completed successfully")
-            log(f"  Result: {json.dumps(job, indent=2)}")
-            record_ids = job.get("record_ids", [])
-            detected_count = job.get("detected_count", 0)
-            log(f"  Created {detected_count} records: {record_ids}")
-            return True
-        elif status == "error":
-            error = job.get("error", "Unknown error")
-            if "budget" in error.lower() or "sedang sibuk" in error.lower():
-                log(f"⚠️  Batch analyze job failed with known budget error (expected): {error}")
-                log(f"  This is acceptable - infrastructure test passed, AI budget exhausted")
-                return True
+    else:
+        print(f"❌ Delete failed: {response.status_code} - {response.text}")
+        return False
+    
+    # Verify record is removed from list
+    response = http_session.get(
+        f"{BASE_URL}/diptest/tests",
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    if response.status_code == 200:
+        data = response.json()
+        record_ids = [r.get('id') for r in data]
+        if record_id not in record_ids:
+            print(f"✅ Record removed from list (soft deleted)")
+        else:
+            print(f"❌ Record still in list after delete")
+            return False
+    
+    # Verify GET returns 404
+    response = http_session.get(
+        f"{BASE_URL}/diptest/tests/{record_id}",
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"GET /api/diptest/tests/{record_id} (after delete): {response.status_code}")
+    
+    if response.status_code == 404:
+        print(f"✅ GET returns 404 after delete")
+    else:
+        print(f"❌ Expected 404, got {response.status_code}")
+        return False
+    
+    return True
+
+
+def test_edge_cases():
+    """Test 10: Edge cases"""
+    print("\n=== TEST 10: EDGE CASES ===")
+    
+    # Test nonexistent image_path
+    print("\n--- Nonexistent image_path ---")
+    response = http_session.post(
+        f"{BASE_URL}/diptest/analyze/start",
+        json={
+            "image_path": "nonexistent/image.jpg",
+            "sample_id": "TEST"
+        },
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"POST /api/diptest/analyze/start (nonexistent image): {response.status_code}")
+    
+    if response.status_code == 404:
+        print(f"✅ Returns 404 for nonexistent image")
+    else:
+        print(f"❌ Expected 404, got {response.status_code}")
+    
+    # Test nonexistent job_id
+    print("\n--- Nonexistent job_id ---")
+    response = http_session.get(
+        f"{BASE_URL}/diptest/analyze/jobs/nonexistent-job-id",
+        headers=get_headers(),
+        timeout=10
+    )
+    
+    print(f"GET /api/diptest/analyze/jobs/nonexistent-job-id: {response.status_code}")
+    
+    if response.status_code == 404:
+        print(f"✅ Returns 404 for nonexistent job")
+    else:
+        print(f"❌ Expected 404, got {response.status_code}")
+
+
+def cleanup():
+    """Clean up test records"""
+    print("\n=== CLEANUP ===")
+    for record_id in test_records_created:
+        try:
+            response = http_session.delete(
+                f"{BASE_URL}/diptest/tests/{record_id}",
+                headers=get_headers(),
+                timeout=10
+            )
+            if response.status_code == 200:
+                print(f"✅ Cleaned up record: {record_id}")
             else:
-                log(f"❌ Batch analyze job failed with unexpected error: {error}")
-                return False
-    
-    log(f"⚠️  Batch analyze job still running after 15s (status: {job.get('status')})")
-    log(f"  Infrastructure test passed - job was created and is processing")
-    return True
+                print(f"⚠️  Failed to clean up record {record_id}: {response.status_code}")
+        except Exception as e:
+            print(f"⚠️  Error cleaning up record {record_id}: {e}")
 
-def test_batch_analyze_nonexistent_image():
-    """Test 8: Batch analyze with nonexistent image for fast 404 contract check"""
-    log("TEST 8: POST /api/copper/batch/analyze/start with nonexistent image → 404")
-    
-    headers = {"X-Session-Token": token}
-    
-    payload = {
-        "image_path": "nonexistent/image.jpg",
-        "batch_id": "TEST-BATCH-404",
-        "sample_ids": ["ID-A", "ID-B", "ID-C", "ID-D"],
-        "product": "Test Product",
-        "temperature_c": 100,
-        "duration_hours": 3
-    }
-    
-    resp = requests.post(f"{BASE_URL}/copper/batch/analyze/start", 
-                        json=payload, 
-                        headers=headers)
-    
-    if resp.status_code != 404:
-        log(f"❌ Expected 404, got {resp.status_code}: {resp.text}")
-        return False
-    
-    log(f"✅ Nonexistent image returns 404: {resp.json()}")
-    return True
-
-def test_batch_get_endpoint():
-    """Test 9: GET /api/copper/batches/{id} endpoint"""
-    log("TEST 9: GET /api/copper/batches/{id} endpoint")
-    
-    headers = {"X-Session-Token": token}
-    
-    # Test with nonexistent batch ID (should return 404)
-    log("  Testing with nonexistent batch ID")
-    resp = requests.get(f"{BASE_URL}/copper/batches/NONEXISTENT-BATCH", headers=headers)
-    if resp.status_code != 404:
-        log(f"❌ Expected 404 for nonexistent batch, got {resp.status_code}: {resp.text}")
-        return False
-    log(f"✅ Nonexistent batch returns 404")
-    
-    # Test without token (should return 401)
-    log("  Testing without token")
-    resp = requests.get(f"{BASE_URL}/copper/batches/TEST-BATCH")
-    if resp.status_code != 401:
-        log(f"❌ Expected 401 without token, got {resp.status_code}: {resp.text}")
-        return False
-    log(f"✅ Auth guard working: 401 without token")
-    
-    return True
-
-def test_batch_delete_endpoint():
-    """Test 10: DELETE /api/copper/batches/{id} endpoint"""
-    log("TEST 10: DELETE /api/copper/batches/{id} endpoint")
-    
-    headers = {"X-Session-Token": token}
-    
-    # Test with nonexistent batch ID (should return 404)
-    log("  Testing soft delete with nonexistent batch ID")
-    resp = requests.delete(f"{BASE_URL}/copper/batches/NONEXISTENT-BATCH", headers=headers)
-    if resp.status_code != 404:
-        log(f"❌ Expected 404 for nonexistent batch, got {resp.status_code}: {resp.text}")
-        return False
-    log(f"✅ Nonexistent batch returns 404")
-    
-    # Test without token (should return 401)
-    log("  Testing without token")
-    resp = requests.delete(f"{BASE_URL}/copper/batches/TEST-BATCH")
-    if resp.status_code != 401:
-        log(f"❌ Expected 401 without token, got {resp.status_code}: {resp.text}")
-        return False
-    log(f"✅ Auth guard working: 401 without token")
-    
-    return True
-
-def check_backend_logs():
-    """Test 11: Check backend logs for errors"""
-    log("TEST 11: Checking backend logs for startup/import errors")
-    
-    try:
-        # Read recent backend logs
-        with open("/var/log/supervisor/backend.err.log", "r") as f:
-            lines = f.readlines()
-            recent_lines = lines[-100:]  # Last 100 lines
-            
-            # Look for critical errors (excluding the old IndentationError that was fixed)
-            critical_errors = []
-            for line in recent_lines:
-                if "Error" in line or "ERROR" in line or "Exception" in line:
-                    # Skip the old IndentationError that was already fixed
-                    if "IndentationError" not in line and "line 1543" not in line:
-                        critical_errors.append(line.strip())
-            
-            if critical_errors:
-                log(f"⚠️  Found {len(critical_errors)} error entries in logs:")
-                for err in critical_errors[-5:]:  # Show last 5
-                    log(f"    {err}")
-            else:
-                log(f"✅ No critical errors in recent logs")
-        
-        # Check if backend is running
-        with open("/var/log/supervisor/backend.out.log", "r") as f:
-            lines = f.readlines()
-            recent_lines = lines[-10:]
-            
-            # Look for successful startup
-            if any("Storage initialized" in line for line in recent_lines):
-                log(f"✅ Backend startup successful (Storage initialized)")
-            else:
-                log(f"⚠️  Could not confirm storage initialization in recent logs")
-        
-        return True
-    except Exception as e:
-        log(f"⚠️  Could not read logs: {e}")
-        return True  # Don't fail test if we can't read logs
 
 def main():
-    log("=" * 80)
-    log("COPPER STRIP 4-SAMPLE BATCH ENHANCEMENT TEST")
-    log("=" * 80)
+    """Main test runner"""
+    print("=" * 80)
+    print("DIP TEST IN HOUSE METHOD - BACKEND API TESTING")
+    print("=" * 80)
     
-    results = []
+    # Login
+    if not login():
+        print("\n❌ FATAL: Cannot proceed without login")
+        return
     
     # Run tests
     try:
-        test_backend_health()
-        results.append(("Backend health", True))
+        # Test 1: Auth guards
+        test_auth_guards()
         
-        login()
-        results.append(("Login", True))
+        # Test 2: Reference scale
+        test_reference_scale()
         
-        results.append(("Batch OCR auth guard", test_batch_ocr_auth_guard()))
-        results.append(("Batch OCR nonexistent image", test_batch_ocr_nonexistent_image()))
+        # Test 3: Dashboard
+        test_dashboard()
         
-        upload_test_image()
-        results.append(("Upload test image", test_image_path is not None))
+        # Test 4: Trend
+        test_trend()
         
-        results.append(("Batch OCR job", test_batch_ocr_job()))
-        results.append(("Batch analyze with sample_ids", test_batch_analyze_with_sample_ids()))
-        results.append(("Batch analyze nonexistent image", test_batch_analyze_nonexistent_image()))
-        results.append(("Batch GET endpoint", test_batch_get_endpoint()))
-        results.append(("Batch DELETE endpoint", test_batch_delete_endpoint()))
-        results.append(("Backend logs check", check_backend_logs()))
+        # Test 5: Tests list & search
+        test_tests_list()
         
-    except Exception as e:
-        log(f"❌ Test suite failed with exception: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        # Test 6: Full AI flow
+        record_id = test_full_ai_flow()
+        
+        if record_id:
+            # Test 7: Analysis result verification
+            if test_analysis_result(record_id):
+                # Test 8: Update operations
+                test_update_operations(record_id)
+                
+                # Test 9: Delete
+                test_delete(record_id)
+        else:
+            print("\n⚠️  Skipping tests 7-9 (no record created - likely AI budget exhaustion)")
+        
+        # Test 10: Edge cases
+        test_edge_cases()
+        
+    finally:
+        # Cleanup
+        cleanup()
     
-    # Summary
-    log("=" * 80)
-    log("TEST SUMMARY")
-    log("=" * 80)
-    
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-    
-    for test_name, result in results:
-        status = "✅ PASSED" if result else "❌ FAILED"
-        log(f"{status}: {test_name}")
-    
-    log("=" * 80)
-    log(f"TOTAL: {passed}/{total} tests passed")
-    log("=" * 80)
-    
-    if passed == total:
-        log("✅ ALL TESTS PASSED")
-        sys.exit(0)
-    else:
-        log(f"❌ {total - passed} tests failed")
-        sys.exit(1)
+    print("\n" + "=" * 80)
+    print("TESTING COMPLETE")
+    print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

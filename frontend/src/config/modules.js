@@ -91,6 +91,16 @@ export const MODULES = {
     ratingLabel: "Rust Rating",
     parameters: [],
   },
+  "dip-test": {
+    slug: "dip-test",
+    title: "DIP TEST In House Method",
+    short: "DIP TEST",
+    description:
+      "Inspeksi spesimen DIP TEST (metode in-house) dengan metode seluruh gambar — AI Vision membagi seluruh foto menjadi 100 kotak (10 × 10) dan menghitung kotak berkarat untuk Grade A–E.",
+    ratingOptions: ["Grade A", "Grade B", "Grade C", "Grade D", "Grade E"],
+    ratingLabel: "Rust Rating",
+    parameters: [],
+  },
   "salt-spray": {
     slug: "salt-spray",
     title: "Salt Spray ASTM B117",

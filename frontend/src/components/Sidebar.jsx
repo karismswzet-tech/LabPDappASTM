@@ -1,6 +1,6 @@
 import React from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { FlaskConical, Beaker, Gauge, Timer, Hexagon, Circle, Palette, LogOut, UserCircle2, Hourglass, ShieldAlert, CloudDrizzle, Droplets } from "lucide-react";
+import { FlaskConical, Beaker, Gauge, Timer, Hexagon, Circle, Palette, LogOut, UserCircle2, Hourglass, ShieldAlert, CloudDrizzle, Droplets, TestTube2 } from "lucide-react";
 import { MODULE_LIST } from "@/config/modules";
 import { KHT_TABS } from "@/pages/kht/KhtLayout";
 import { DKA_TABS } from "@/pages/dka/DkaLayout";
@@ -10,6 +10,7 @@ import { DKACEC_TABS } from "@/pages/dkacec/DkacecLayout";
 import { RUST_TABS } from "@/pages/rust/RustLayout";
 import { SALT_TABS } from "@/pages/saltspray/SaltLayout";
 import { HUMIDITY_TABS } from "@/pages/humidity/HumidityLayout";
+import { DIP_TABS } from "@/pages/diptest/DipLayout";
 import { useAuth } from "@/context/AuthContext";
 
 const ICONS = {
@@ -21,6 +22,7 @@ const ICONS = {
   "rust-preventing": ShieldAlert,
   "salt-spray": CloudDrizzle,
   "humidity-cabinet": Droplets,
+  "dip-test": TestTube2,
 };
 
 const SUBNAV = {
@@ -32,6 +34,7 @@ const SUBNAV = {
   "rust-preventing": { tabs: RUST_TABS, active: "text-amber-400" },
   "salt-spray": { tabs: SALT_TABS, active: "text-amber-400" },
   "humidity-cabinet": { tabs: HUMIDITY_TABS, active: "text-amber-400" },
+  "dip-test": { tabs: DIP_TABS, active: "text-amber-400" },
 };
 
 const SubNav = ({ slug }) => (
