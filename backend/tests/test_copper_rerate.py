@@ -5,7 +5,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://webapp-astm2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://webapp-rating.preview.emergentagent.com").rstrip("/")
 
 # Reuse pre-existing batch to keep AI cost low (iteration_15 note)
 EXISTING_BATCH_ID = "CU-BATCH-20261008-356"

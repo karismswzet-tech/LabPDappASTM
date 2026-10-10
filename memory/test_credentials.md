@@ -33,3 +33,9 @@ Hash aktif di .env terverifikasi untuk password `admin123`.
 - .env dipulihkan via scripts/restore_env.sh; REACT_APP_BACKEND_URL di-set ke preview pod ini (03506451-...preview.emergentagent.com).
 - EMERGENT_LLM_KEY dari backup aktif (tes LLM OK). DB_NAME=elastech_lab.
 - Login admin/admin123 terverifikasi.
+
+## Re-import (2026-10-10) dari github.com/karismswzet-tech/WebappRatingASTmLab
+- .env dipulihkan via scripts/restore_env.sh.
+- frontend/.env REACT_APP_BACKEND_URL di-set ke preview pod ini (3f7e8b92-1782-4a41-8fe8-2b813cd0fd40.preview.emergentagent.com).
+- Semua dependency backend & frontend terpasang; backend & frontend RUNNING.
+- Login admin/admin123 terverifikasi (HTTP 200). Demo data K-HTT, DKA, Copper Strip ter-seed otomatis.

@@ -7,7 +7,7 @@ import base64
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://webapp-astm2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://webapp-rating.preview.emergentagent.com").rstrip("/")
 FIXTURE = "/app/tests/fixtures/copper_batch_4.jpg"
 
 
