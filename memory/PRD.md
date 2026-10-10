@@ -249,3 +249,12 @@ Testing agent iteration_6.json: 20/20 pass. Confirmed: login sets HttpOnly cooki
 - **Humidity Cabinet Test ASTM D1748** (`/api/humidity/*`, slug `/humidity-cabinet`): klon Rust Preventing, penilaian SELALU metode Seluruh Gambar (seluruh foto = active zone, 10×10 = 100 kotak), Grade A–E sama. Koleksi `humidity_tests`/`humidity_jobs`. Tanpa demo data.
 - **DIP TEST In House Method** (`/api/diptest/*`, slug `/dip-test`): klon persis modul Humidity Cabinet (metode Seluruh Gambar, 10×10 = 100 kotak, Grade A–E sama). Koleksi `diptest_tests`/`diptest_jobs`. Tanpa demo data.
 - Kedua modul memakai AI Vision Gemini gemini-3.1-pro-preview (Emergent LLM key), fitur: analisa AI, koreksi grid manual, penilaian inspector, dashboard, trend, history, export PDF.
+
+## Fix Rust D1748 AI Vision + Label OCR baru (2026-10-10, teruji iteration_18: backend 35/35, frontend 100%)
+- RCA: modul Salt Spray mendefinisikan ulang `_analyze_rust` → analisa Rust tersimpan ke salt_tests, GET /api/rust/tests/{id} 404.
+  Fungsi Salt di-rename `_analyze_salt`.
+- Baru: POST /api/rust/ocr/start + GET /api/rust/ocr/jobs/{id} (generic _label_ocr_start, Gemini 3.1 Pro) — baca label tulisan tangan
+  (sample_id, operator, batch, suhu, exposure). New Inspection: foto di-upload sekali, OCR otomatis, kartu LABEL OCR + tombol Baca Ulang,
+  isi form otomatis (Sample ID tidak ditimpa bila user sudah mengetik).
+- get_object menolak path kosong; /rust/analyze/start & /rust/ocr/start → 400 bila image_path kosong.
+- Fixture: tests/fixtures/rust_panel.jpg; pytest backend/tests/test_rust_fix_and_ocr.py.
