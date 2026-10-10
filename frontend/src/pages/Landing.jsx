@@ -11,6 +11,9 @@ import {
   LogIn,
   Hexagon,
   ShieldCheck,
+  ShieldAlert,
+  CloudDrizzle,
+  Droplets,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MODULE_LIST } from "@/config/modules";
@@ -19,7 +22,7 @@ import mottoBanner from "@/assets/motto-banner.jpg";
 
 const HERO_IMG = heroLab;
 
-const MODULE_ICONS = { khtt: FlaskConical, "copper-strip": Beaker, "rating-dka": Gauge, htcbt: Timer, "dka-cec": Hourglass };
+const MODULE_ICONS = { khtt: FlaskConical, "copper-strip": Beaker, "rating-dka": Gauge, htcbt: Timer, "dka-cec": Hourglass, "rust-preventing": ShieldAlert, "salt-spray": CloudDrizzle, "humidity-cabinet": Droplets };
 
 const EXPERTISE = [
   {

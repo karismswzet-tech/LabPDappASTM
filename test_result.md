@@ -147,6 +147,20 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ POST-IMPORT BACKEND VERIFICATION COMPLETE — ALL 9 TESTS PASSED. Repository imported from https://github.com/karismswzet-tech/webapplandingpage5app.git. Backend service healthy and all auth/module endpoints working correctly. (1) Backend health: GET /api/→200 'Elastech Production API'✅. (2) Auth login scenarios: POST /api/auth/login with wrong password→401 'Username atau password salah'✅, with admin/admin123→200 {token,username:admin,ttl_minutes:60}✅. (3) Auth /me endpoint: GET /api/auth/me without token→401✅, with valid token→200 {username:admin,ttl_minutes:60}✅. (4) Route guard: GET /api/copper/dashboard without token→401✅, with token→200✅. (5) Module smoke routes ALL PASSED with auth token: GET /api/kht/dashboard→200✅, GET /api/dka/dashboard→200✅, GET /api/copper/dashboard→200✅, GET /api/htcbt/methods→200✅, GET /api/dkacec/methods→200✅. (6) Logout: POST /api/auth/logout→200 {ok:true}✅, reusing invalidated token on /api/auth/me→401✅. Backend logs verified: no startup errors, storage initialized successfully, demo data seeded (KHT tests, DKA batch, Copper Strip tests), application startup complete. All imported modules (KHT, DKA, Copper Strip, HTCBT, DKA-CEC) accessible and responding correctly. No demo data altered during testing. Credentials admin/admin123 working as expected."
+  - task: "Humidity Cabinet Test ASTM D1748 module (whole-image 100-box) — /api/humidity/*"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW MODULE mirroring Rust Preventing ASTM D1748 but ALWAYS using the WHOLE-IMAGE method: seluruh foto = active zone, dibagi rata 10x10 = 100 kotak (no 50x50mm plate zone, no method switching, no locate-grid). Grade A-E thresholds identical to Rust (A=0, B=1-10, C=11-25, D=26-50, E=51-100). Separate Mongo collections humidity_tests + humidity_jobs (does NOT touch rust_tests). Endpoints under /api/humidity/*: POST analyze/start {image_path + meta} -> HumidityJob; GET analyze/jobs/{id}; GET tests (q search); GET tests/{id}; PUT tests/{id} (grid_boxes/rusted_box_count correction + inspector_count/name/notes manual assessment, recomputes grade); DELETE tests/{id} (soft delete); GET dashboard (latest/total/grade_counts/average_rusted_boxes); GET trend; GET reference-scale. Uses Gemini gemini-3.1-pro-preview vision via run_humidity_vision with HUM_PROMPT (whole-image corrosion counting). Reuses existing /api/kht/upload for image upload and generic _rust_grid_from_ai helper. Verified manually via curl: dashboard→200 {total:0}, tests→200 [], reference-scale→200 (whole-image scale), auth guard→401 without token. NO demo data seeded (per user request). Needs backend testing of full flow (analyze requires real AI; budget may be limited — infra verification acceptable if budget exhausted)."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL 16 HUMIDITY MODULE TESTS PASSED. Comprehensive backend testing completed for new Humidity Cabinet Test ASTM D1748 module. (1) AUTH GUARDS: GET /api/humidity/dashboard without session→401 'Tidak terautentikasi. Silakan login.'✅, POST /api/humidity/analyze/start without session→401✅. (2) REFERENCE SCALE: GET /api/humidity/reference-scale→200✅, structure verified: title='ASTM D1748 Humidity Cabinet 100-Box Scale (Seluruh Gambar)'✅, measurement_area='Seluruh gambar = active zone, dibagi rata 10 x 10 = 100 kotak'✅, grades A-E present with correct thresholds (A=0-0, B=1-10, C=11-25, D=26-50, E=51-100)✅. (3) DASHBOARD: GET /api/humidity/dashboard→200✅, structure verified: total=0✅, grade_counts={A:0,B:0,C:0,D:0,E:0}✅, average_rusted_boxes=0✅. (4) TREND & TESTS: GET /api/humidity/trend→200 (0 records)✅, GET /api/humidity/tests→200 (0 records)✅, GET /api/humidity/tests?q=TEST→200 (search working)✅. (5) FULL AI FLOW: Uploaded test image via POST /api/kht/upload→200✅, started analysis via POST /api/humidity/analyze/start with full payload (sample_id, product, operator, exposure_hours=168, temperature_c=48.9, humidity_pct=95, substrate, remark)→200✅, job created with status='running'✅, polled GET /api/humidity/analyze/jobs/{id} until done in ~6 seconds with REAL Gemini AI call (gemini-3.1-pro-preview)✅, record_id returned✅. (6) ANALYSIS RESULT VERIFICATION: GET /api/humidity/tests/{record_id}→200✅, grid_boxes has exactly 100 booleans✅, rusted_box_count=0 matches count of true in grid_boxes (0)✅, grade='A' matches threshold for rusted_count=0✅, method='full' (whole-image)✅, grid_corners present as full-image corners [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]]✅. (7) EDGE CASES: POST /api/humidity/analyze/start with nonexistent image_path→404 'Image not found in storage'✅, GET /api/humidity/analyze/jobs/nonexistent→404 'Job not found'✅. (8) UPDATE OPERATIONS: PUT /api/humidity/tests/{id} with rusted_box_count=15→200✅, grade updated to 'C' (11-25 range)✅, edited=true✅, grid_boxes recomputed with 15 true values✅. PUT with inspector_count=30→200✅, inspector_grade='D' (26-50 range)✅, inspector_name='QA'✅, inspector_notes='Manual inspection notes'✅, inspector_at set✅. PUT with inspector_count=-1→200✅, inspector_count cleared (null)✅. (9) DELETE: DELETE /api/humidity/tests/{id}→200✅, record removed from list✅, GET /api/humidity/tests/{id}→404 after delete✅. VERIFICATION: AI integration is REAL (Gemini gemini-3.1-pro-preview), not mocked. All endpoints working correctly. Grade thresholds correctly implemented. Grid recomputation working. Inspector manual assessment working. Soft delete working. No demo data altered. Test record cleaned up. All requirements from review request met."
   - task: "Copper Strip AI Vision analyze job (start + polling) — /api/copper/analyze/start & jobs/{id}"
     implemented: true
     working: true
@@ -396,12 +410,86 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Copper Strip 4-sample batch frontend verified - all tests passed"
+    - "Humidity Cabinet Test ASTM D1748 module (whole-image 100-box) — /api/humidity/*"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        NEW MODULE added: Humidity Cabinet Test ASTM D1748 (/api/humidity/*). It mirrors the Rust Preventing module but ALWAYS uses the whole-image method (seluruh foto = active zone, dibagi rata 10x10 = 100 kotak). Grade A-E identical to Rust. Separate collections humidity_tests/humidity_jobs. No demo data seeded.
+        Please test the backend humidity endpoints (auth: admin/admin123):
+        1. Auth guard: GET /api/humidity/dashboard and POST /api/humidity/analyze/start without token → 401.
+        2. GET /api/humidity/reference-scale (whole-image scale, Grades A-E), /api/humidity/dashboard (total/grade_counts/average), /api/humidity/trend, /api/humidity/tests (q search) with token.
+        3. Full AI flow: upload image via POST /api/kht/upload, then POST /api/humidity/analyze/start {image_path, sample_id, product, operator, exposure_hours, temperature_c, humidity_pct, substrate, remark} → HumidityJob (status running). Poll GET /api/humidity/analyze/jobs/{id}. On done → GET /api/humidity/tests/{record_id}: verify grid_boxes has 100 bools, rusted_box_count == sum(grid_boxes), grade matches thresholds, method == "full", grid_corners == full image [[0,0],[1,0],[1,1],[0,0]]-style. NOTE: AI is REAL (Gemini). If budget exhausted, a friendly Indonesian error in job.error is acceptable (infra verification).
+        4. PUT /api/humidity/tests/{id} with rusted_box_count=15 → grade C, grade recomputed, edited=true; with inspector_count=30 → inspector_grade D, inspector_at set; inspector_count=-1 clears manual.
+        5. DELETE /api/humidity/tests/{id} soft-deletes (disappears from list, GET → 404).
+        6. Invalid image_path on analyze/start → 404; nonexistent job id → 404.
+        Do NOT alter other modules' demo data.
+    - agent: "testing"
+      message: |
+        ✅ ALL 16 HUMIDITY MODULE TESTS PASSED — COMPREHENSIVE BACKEND VERIFICATION COMPLETE
+        
+        Tested the NEW Humidity Cabinet Test ASTM D1748 module (/api/humidity/*) with full AI flow verification. All requirements from review request met.
+        
+        **AUTH GUARDS (2/2 PASSED):**
+        - GET /api/humidity/dashboard without session → 401 'Tidak terautentikasi. Silakan login.' ✅
+        - POST /api/humidity/analyze/start without session → 401 ✅
+        
+        **BASIC ENDPOINTS WITH SESSION (5/5 PASSED):**
+        - GET /api/humidity/reference-scale → 200 ✅
+          • Title: 'ASTM D1748 Humidity Cabinet 100-Box Scale (Seluruh Gambar)' ✅
+          • Measurement area: 'Seluruh gambar = active zone, dibagi rata 10 x 10 = 100 kotak' ✅
+          • Grades A-E with correct thresholds: A=0-0, B=1-10, C=11-25, D=26-50, E=51-100 ✅
+        - GET /api/humidity/dashboard → 200 ✅
+          • Structure: total=0, grade_counts={A:0,B:0,C:0,D:0,E:0}, average_rusted_boxes=0 ✅
+        - GET /api/humidity/trend → 200 (0 records) ✅
+        - GET /api/humidity/tests → 200 (0 records) ✅
+        - GET /api/humidity/tests?q=TEST → 200 (search working) ✅
+        
+        **FULL AI FLOW (1/1 PASSED):**
+        - Uploaded test image via POST /api/kht/upload → 200 ✅
+        - POST /api/humidity/analyze/start with full payload → 200, job created with status='running' ✅
+          • Payload: sample_id, product, operator, exposure_hours=168, temperature_c=48.9, humidity_pct=95, substrate, remark ✅
+        - Polled GET /api/humidity/analyze/jobs/{id} → job completed in ~6 seconds with REAL Gemini AI call (gemini-3.1-pro-preview) ✅
+        - GET /api/humidity/tests/{record_id} → 200 ✅
+          • grid_boxes has exactly 100 booleans ✅
+          • rusted_box_count=0 matches count of true in grid_boxes (0) ✅
+          • grade='A' matches threshold for rusted_count=0 ✅
+          • method='full' (whole-image) ✅
+          • grid_corners present as full-image corners [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]] ✅
+        
+        **EDGE CASES (2/2 PASSED):**
+        - POST /api/humidity/analyze/start with nonexistent image_path → 404 'Image not found in storage' ✅
+        - GET /api/humidity/analyze/jobs/nonexistent → 404 'Job not found' ✅
+        
+        **UPDATE OPERATIONS (3/3 PASSED):**
+        - PUT /api/humidity/tests/{id} with rusted_box_count=15 → 200 ✅
+          • grade updated to 'C' (11-25 range) ✅
+          • edited=true ✅
+          • grid_boxes recomputed with 15 true values ✅
+        - PUT with inspector_count=30 → 200 ✅
+          • inspector_grade='D' (26-50 range) ✅
+          • inspector_name='QA', inspector_notes='Manual inspection notes' ✅
+          • inspector_at set ✅
+        - PUT with inspector_count=-1 → 200 ✅
+          • inspector_count cleared (null) ✅
+        
+        **DELETE (1/1 PASSED):**
+        - DELETE /api/humidity/tests/{id} → 200 ✅
+          • Record removed from list ✅
+          • GET /api/humidity/tests/{id} → 404 after delete ✅
+        
+        **VERIFICATION:**
+        - AI integration is REAL (Gemini gemini-3.1-pro-preview), not mocked ✅
+        - All endpoints working correctly ✅
+        - Grade thresholds correctly implemented ✅
+        - Grid recomputation working ✅
+        - Inspector manual assessment working ✅
+        - Soft delete working ✅
+        - No demo data altered ✅
+        - Test record cleaned up ✅
     - agent: "testing"
       message: |
         ✅ ALL 16 AUTH TESTS PASSED. (1) Login scenarios: wrong password→401✅, correct creds→200 with {token,username:admin,ttl_minutes:60}✅, wrong username→401✅. (2) Route guard: protected endpoints without token→401✅, with X-Session-Token→200✅, smoke check /api/copper/dashboard, /api/dka/dashboard, /api/kht/dashboard all return 200 with token✅. (3) /api/auth/me: without token→401✅, with valid token→200 {username:admin,ttl_minutes:60}✅, with garbage token abc123→401✅. (4) Public paths: GET /api/ (health)→200✅, GET /api/kht/files/nonexistentfile→404 (not 401, image serving is public)✅. (5) Logout: POST /api/auth/logout→200 {ok:true}✅, reusing same token on /api/copper/dashboard→401✅, reusing on /api/auth/me→401✅ (session fully deleted). (6) Sliding expiry: 3 consecutive /api/auth/me calls all return 200✅ (expiry refreshes on each call). Auth system working correctly. Both X-Session-Token and Authorization: Bearer <token> headers supported.

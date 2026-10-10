@@ -81,6 +81,16 @@ export const MODULES = {
     ratingLabel: "Rust Rating",
     parameters: [],
   },
+  "humidity-cabinet": {
+    slug: "humidity-cabinet",
+    title: "Humidity Cabinet Test ASTM D1748",
+    short: "Humidity D1748",
+    description:
+      "Inspeksi spesimen humidity cabinet dengan metode seluruh gambar — AI Vision membagi seluruh foto menjadi 100 kotak (10 × 10) dan menghitung kotak berkarat untuk Grade A–E.",
+    ratingOptions: ["Grade A", "Grade B", "Grade C", "Grade D", "Grade E"],
+    ratingLabel: "Rust Rating",
+    parameters: [],
+  },
   "salt-spray": {
     slug: "salt-spray",
     title: "Salt Spray ASTM B117",

@@ -51,6 +51,13 @@ import SaltHistory from "@/pages/saltspray/History";
 import SaltTrend from "@/pages/saltspray/Trend";
 import SaltResult from "@/pages/saltspray/Result";
 import SaltScale from "@/pages/saltspray/Scale";
+import HumidityLayout from "@/pages/humidity/HumidityLayout";
+import HumidityDashboard from "@/pages/humidity/Dashboard";
+import HumidityNewTest from "@/pages/humidity/NewTest";
+import HumidityHistory from "@/pages/humidity/History";
+import HumidityTrend from "@/pages/humidity/Trend";
+import HumidityResult from "@/pages/humidity/Result";
+import HumidityScale from "@/pages/humidity/Scale";
 
 function App() {
   return (
@@ -113,6 +120,14 @@ function App() {
                 <Route path="grid-scale" element={<SaltScale />} />
               </Route>
               <Route path="/salt-spray/result/:id" element={<SaltResult />} />
+              <Route path="/humidity-cabinet" element={<HumidityLayout />}>
+                <Route index element={<HumidityDashboard />} />
+                <Route path="new" element={<HumidityNewTest />} />
+                <Route path="history" element={<HumidityHistory />} />
+                <Route path="trend" element={<HumidityTrend />} />
+                <Route path="grid-scale" element={<HumidityScale />} />
+              </Route>
+              <Route path="/humidity-cabinet/result/:id" element={<HumidityResult />} />
               <Route path="/:module" element={<ModulePage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

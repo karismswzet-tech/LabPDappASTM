@@ -2616,6 +2616,316 @@ async def rust_reference_scale():
     return {"title": "ASTM D1748 Rust Preventing 100-Box Scale", "measurement_area": "50 x 50 mm central surface", "plate": "60 x 80 mm; 0.5 mm cross cuts; 100 boxes of 5 x 5 mm", "grades": RUST_GRADES}
 
 
+# MODULE: Humidity Cabinet Test — ASTM D1748 / WHOLE-IMAGE 100-box inspection
+# ===========================================================================
+# Fitur sama persis dengan Rust Preventing ASTM D1748, tetapi penilaian rating
+# SELALU memakai metode Seluruh Gambar: seluruh foto = active zone, dibagi rata
+# 10 x 10 = 100 kotak. Tidak ada metode plate 50 x 50 mm.
+HUM_GRADES = RUST_GRADES  # skala & label Grade A-E identik dengan Rust Preventing
+
+
+def hum_grade_for(count: int) -> str:
+    return rust_grade_for(count)
+
+
+HUM_PROMPT = """You are an expert metallurgical inspector for the Humidity Cabinet Test ASTM D1748 using the WHOLE-IMAGE method.
+
+Analyze the SECOND image: a metal test specimen that has been exposed in a humidity cabinet (high humidity + elevated temperature) per ASTM D1748. The ACTIVE ZONE is the ENTIRE image as displayed. Mentally divide the full image into an exact 10 x 10 grid of 100 equal boxes: each box spans 10% of the image width and 10% of the image height. Box 1 is the top-left, box 10 the top-right, box 100 the bottom-right (row-major, top-to-bottom, left-to-right). Do NOT rotate or re-frame the image.
+
+COUNTING RULES:
+- Count a box as corroded when at least one naked-eye-visible rust/corrosion spot (orange/brown/red-brown corrosion product) is present on the metal test specimen surface inside that box.
+- If corrosion crosses a box boundary, count every box it touches.
+- Do not count glare, reflections, water droplets, condensation, dust, scratches, shadows, or any transparent cover as corrosion.
+- Corrosion on background equipment that is clearly not part of the test specimen(s) is NOT counted.
+
+GRADE RULES:
+Grade A = 0 corroded boxes; Grade B = 1-10; Grade C = 11-25; Grade D = 26-50; Grade E = 51-100.
+
+Return ONLY valid minified JSON with EXACTLY these keys:
+{"rusted_box_count":<integer 0-100>,"grade":"A|B|C|D|E","confidence":<number 0-100>,"grid_boxes":[<exactly 100 booleans, row-major top-to-bottom>],"specimen_box_count":<integer 0-100, boxes that contain any metal specimen surface>,"rust_spread":"<localized|scattered|clustered|widespread|near-total>","summary":"<short Indonesian note describing corrosion distribution across the whole image grid and which rows/columns are most affected>","recommendation":"<one short Indonesian practical recommendation>"}
+The grid_boxes array is mandatory and its true count MUST equal rusted_box_count. When a box is ambiguous, count only clearly visible corrosion and lower confidence."""
+
+
+async def run_humidity_vision(image_b64: str) -> dict:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"humidity-d1748-{uuid.uuid4()}",
+        system_message="You are a precise ASTM D1748 humidity-cabinet corrosion grid inspector that only outputs JSON.",
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+    parts = []
+    async for event in chat.stream_message(UserMessage(text=HUM_PROMPT, file_contents=[ImageContent(image_base64=image_b64)])):
+        if isinstance(event, TextDelta):
+            parts.append(event.content)
+        elif isinstance(event, StreamDone):
+            break
+    return _parse_ai_json("".join(parts))
+
+
+class HumidityMeta(BaseModel):
+    sample_id: str = ""
+    product: str = ""
+    batch: str = ""
+    operator: str = ""
+    exposure_hours: float = 168
+    temperature_c: float = 48.9
+    humidity_pct: float = 95
+    substrate: str = "Cold Rolled Steel 1018"
+    remark: str = ""
+
+
+class HumidityAnalyzeRequest(HumidityMeta):
+    image_path: str
+
+
+class HumidityRecord(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    image_path: str
+    meta: HumidityMeta
+    rusted_box_count: int = 0
+    grade: str = "A"
+    grade_label: str = "Bersih tanpa karat"
+    grade_status: str = "EXCELLENT PASS"
+    confidence: float = 0
+    grid_boxes: List[bool] = Field(default_factory=lambda: [False] * 100)
+    rust_spread: str = "localized"
+    ai_summary: str = ""
+    recommendation: str = ""
+    ai_model: str = "gemini-3.1-pro-preview"
+    # Original AI Vision verdict (never overwritten by grid corrections)
+    ai_grid_boxes: Optional[List[bool]] = None
+    ai_rusted_box_count: Optional[int] = None
+    ai_grade: Optional[str] = None
+    grid_corners: Optional[List[List[float]]] = None
+    specimen_box_count: Optional[int] = None
+    # Inspector's own manual assessment (separate from grid correction)
+    inspector_count: Optional[int] = None
+    inspector_grade: Optional[str] = None
+    inspector_name: str = ""
+    inspector_notes: str = ""
+    inspector_at: Optional[str] = None
+    # Humidity Cabinet selalu metode "Seluruh Gambar" (whole image 10x10)
+    method: str = "full"
+    analyzed_at: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+    edited: bool = False
+    edited_at: Optional[str] = None
+    deleted_at: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _fill_ai_original(self):
+        if self.ai_grid_boxes is None:
+            self.ai_grid_boxes = list(self.grid_boxes)
+        if self.ai_rusted_box_count is None:
+            self.ai_rusted_box_count = sum(bool(v) for v in self.ai_grid_boxes)
+        if not self.ai_grade:
+            self.ai_grade = hum_grade_for(self.ai_rusted_box_count)
+        self.method = "full"
+        if not self.grid_corners:
+            self.grid_corners = [list(p) for p in FULL_IMAGE_CORNERS]
+        if not self.analyzed_at:
+            self.analyzed_at = self.created_at
+        return self
+
+
+class HumidityJob(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    status: str = "running"
+    record_id: Optional[str] = None
+    error: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+    finished_at: Optional[str] = None
+
+
+class HumidityUpdate(BaseModel):
+    rusted_box_count: Optional[int] = None
+    grid_boxes: Optional[List[bool]] = None
+    ai_summary: Optional[str] = None
+    recommendation: Optional[str] = None
+    inspector_count: Optional[int] = None  # -1 clears the manual assessment
+    inspector_name: Optional[str] = None
+    inspector_notes: Optional[str] = None
+
+
+def _humidity_result_fields(ai: dict) -> dict:
+    boxes, count = _rust_grid_from_ai(ai)
+    grade = hum_grade_for(count)
+    rule = HUM_GRADES[grade]
+    try:
+        spec = max(0, min(100, int(float(ai.get("specimen_box_count")))))
+    except (TypeError, ValueError):
+        spec = None
+    return {
+        "rusted_box_count": count, "grade": grade, "grade_label": rule["label"], "grade_status": rule["status"],
+        "confidence": _clamp(ai.get("confidence"), 0, 100), "grid_boxes": boxes, "ai_grid_boxes": list(boxes),
+        "ai_rusted_box_count": count, "ai_grade": grade,
+        "grid_corners": [list(p) for p in FULL_IMAGE_CORNERS], "specimen_box_count": spec,
+        "rust_spread": str(ai.get("rust_spread", "localized")), "ai_summary": str(ai.get("summary", "")),
+        "recommendation": str(ai.get("recommendation", "")), "ai_model": "gemini-3.1-pro-preview",
+        "analyzed_at": now_iso(), "edited": False, "edited_at": None,
+    }
+
+
+def _build_humidity_record(req: HumidityAnalyzeRequest, ai: dict) -> HumidityRecord:
+    fields = _humidity_result_fields(ai)
+    return HumidityRecord(
+        image_path=req.image_path,
+        meta=HumidityMeta(**req.model_dump(exclude={"image_path"})),
+        method="full",
+        **fields,
+    )
+
+
+async def _analyze_humidity(req: HumidityAnalyzeRequest) -> HumidityRecord:
+    try:
+        content, _ = await run_in_threadpool(get_object, req.image_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Image not found in storage")
+    small = await run_in_threadpool(_downscale_for_ai, content, 2200)
+    b64 = base64.b64encode(small).decode("utf-8")
+    try:
+        ai = await run_humidity_vision(b64)
+        record = _build_humidity_record(req, ai)
+    except Exception as e:
+        logger.exception("Humidity D1748 AI vision failed")
+        raise HTTPException(status_code=502, detail=f"AI Vision analysis failed: {friendly_ai_error(e)}")
+    await db.humidity_tests.insert_one(record.model_dump())
+    return record
+
+
+async def _run_humidity_job(job_id: str, req: HumidityAnalyzeRequest):
+    try:
+        record = await _analyze_humidity(req)
+        await db.humidity_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "record_id": record.id, "finished_at": now_iso()}})
+    except HTTPException as e:
+        await db.humidity_jobs.update_one({"id": job_id}, {"$set": {"status": "error", "error": str(e.detail), "finished_at": now_iso()}})
+    except Exception as e:
+        logger.exception("humidity analyze job failed")
+        await db.humidity_jobs.update_one({"id": job_id}, {"$set": {"status": "error", "error": friendly_ai_error(e), "finished_at": now_iso()}})
+
+
+@api_router.post("/humidity/analyze/start", response_model=HumidityJob)
+async def humidity_analyze_start(req: HumidityAnalyzeRequest):
+    try:
+        await run_in_threadpool(get_object, req.image_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Image not found in storage")
+    job = HumidityJob()
+    await db.humidity_jobs.insert_one(job.model_dump())
+    asyncio.create_task(_run_humidity_job(job.id, req))
+    return job
+
+
+@api_router.get("/humidity/analyze/jobs/{job_id}", response_model=HumidityJob)
+async def humidity_job_status(job_id: str):
+    doc = await db.humidity_jobs.find_one({"id": job_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return HumidityJob(**doc)
+
+
+@api_router.get("/humidity/tests", response_model=List[HumidityRecord])
+async def humidity_list(q: Optional[str] = None):
+    query: dict = {"deleted_at": None}
+    if q:
+        query["$or"] = [
+            {"meta.sample_id": {"$regex": q, "$options": "i"}},
+            {"meta.product": {"$regex": q, "$options": "i"}},
+            {"meta.batch": {"$regex": q, "$options": "i"}},
+            {"meta.operator": {"$regex": q, "$options": "i"}},
+        ]
+    docs = await db.humidity_tests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [HumidityRecord(**doc) for doc in docs]
+
+
+@api_router.get("/humidity/tests/{test_id}", response_model=HumidityRecord)
+async def humidity_get(test_id: str):
+    doc = await db.humidity_tests.find_one({"id": test_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Humidity inspection not found")
+    return HumidityRecord(**doc)
+
+
+@api_router.put("/humidity/tests/{test_id}", response_model=HumidityRecord)
+async def humidity_update(test_id: str, upd: HumidityUpdate):
+    doc = await db.humidity_tests.find_one({"id": test_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Humidity inspection not found")
+    changes = upd.model_dump(exclude_none=True)
+    # Freeze the original AI verdict before the first correction (legacy records)
+    if doc.get("ai_grid_boxes") is None:
+        orig = HumidityRecord(**doc)
+        changes["ai_grid_boxes"] = orig.ai_grid_boxes
+        changes["ai_rusted_box_count"] = orig.ai_rusted_box_count
+        changes["ai_grade"] = orig.ai_grade
+    inspector_touched = any(k in changes for k in ("inspector_count", "inspector_name", "inspector_notes"))
+    if "inspector_count" in changes:
+        ic = int(changes["inspector_count"])
+        if ic < 0:
+            changes["inspector_count"] = None
+            changes["inspector_grade"] = None
+        else:
+            ic = min(100, ic)
+            changes["inspector_count"] = ic
+            changes["inspector_grade"] = hum_grade_for(ic)
+    if inspector_touched:
+        changes["inspector_at"] = now_iso()
+    if "grid_boxes" in changes:
+        boxes = [bool(v) for v in changes["grid_boxes"][:100]]
+        boxes.extend([False] * (100 - len(boxes)))
+        changes["grid_boxes"] = boxes
+        changes["rusted_box_count"] = sum(boxes)
+    elif "rusted_box_count" in changes:
+        count = max(0, min(100, int(changes["rusted_box_count"])))
+        changes["rusted_box_count"] = count
+        changes["grid_boxes"] = [i < count for i in range(100)]
+    if "rusted_box_count" in changes:
+        grade = hum_grade_for(changes["rusted_box_count"])
+        changes["grade"] = grade
+        changes["grade_label"] = HUM_GRADES[grade]["label"]
+        changes["grade_status"] = HUM_GRADES[grade]["status"]
+    if not changes:
+        return HumidityRecord(**doc)
+    result_touched = any(k in changes for k in ("grid_boxes", "rusted_box_count", "ai_summary", "recommendation"))
+    if result_touched:
+        changes["edited"] = True
+        changes["edited_at"] = now_iso()
+    await db.humidity_tests.update_one({"id": test_id}, {"$set": changes})
+    updated = await db.humidity_tests.find_one({"id": test_id}, {"_id": 0})
+    return HumidityRecord(**updated)
+
+
+@api_router.delete("/humidity/tests/{test_id}")
+async def humidity_delete(test_id: str):
+    res = await db.humidity_tests.update_one({"id": test_id}, {"$set": {"deleted_at": now_iso()}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Humidity inspection not found")
+    return {"ok": True}
+
+
+@api_router.get("/humidity/dashboard")
+async def humidity_dashboard():
+    docs = await db.humidity_tests.find({"deleted_at": None}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    records = [HumidityRecord(**doc) for doc in docs]
+    counts = {grade: 0 for grade in HUM_GRADES}
+    for record in records:
+        counts[record.grade] = counts.get(record.grade, 0) + 1
+    avg = round(sum(r.rusted_box_count for r in records) / len(records), 1) if records else 0
+    return {"latest": records[0].model_dump() if records else None, "total": len(records), "grade_counts": counts, "average_rusted_boxes": avg}
+
+
+@api_router.get("/humidity/trend")
+async def humidity_trend():
+    docs = await db.humidity_tests.find({"deleted_at": None}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    return [{"id": d["id"], "sample_id": d.get("meta", {}).get("sample_id", ""), "rusted_box_count": d.get("rusted_box_count", 0), "grade": d.get("grade", "A"), "created_at": d.get("created_at")} for d in docs]
+
+
+@api_router.get("/humidity/reference-scale")
+async def humidity_reference_scale():
+    return {"title": "ASTM D1748 Humidity Cabinet 100-Box Scale (Seluruh Gambar)", "measurement_area": "Seluruh gambar = active zone, dibagi rata 10 x 10 = 100 kotak", "plate": "Tanpa plate; seluruh foto dibagi menjadi 100 kotak (10 x 10)", "grades": HUM_GRADES}
+
+
 # MODULE: Salt Spray — ASTM B117 / 100-box metal panel inspection
 # ===========================================================================
 SALT_GRADES = {
