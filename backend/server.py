@@ -220,6 +220,8 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
 
 def get_object(path: str):
     global _storage_key
+    if not str(path or "").strip() or str(path).strip().endswith("/"):
+        raise FileNotFoundError("empty image path")
     key = init_storage()
     resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
     if resp.status_code in (404, 503):
@@ -2397,6 +2399,8 @@ async def _run_rust_job(job_id: str, req: RustAnalyzeRequest):
 
 @api_router.post("/rust/analyze/start", response_model=RustJob)
 async def rust_analyze_start(req: RustAnalyzeRequest):
+    if not (req.image_path or "").strip():
+        raise HTTPException(status_code=400, detail="image_path wajib diisi — unggah foto terlebih dahulu")
     try:
         await run_in_threadpool(get_object, req.image_path)
     except Exception:
@@ -3519,7 +3523,7 @@ def _build_salt_record(req: SaltAnalyzeRequest, ai: dict) -> SaltRecord:
     )
 
 
-async def _analyze_rust(req: SaltAnalyzeRequest) -> SaltRecord:
+async def _analyze_salt(req: SaltAnalyzeRequest) -> SaltRecord:
     try:
         content, _ = await run_in_threadpool(get_object, req.image_path)
     except Exception:
@@ -3538,7 +3542,7 @@ async def _analyze_rust(req: SaltAnalyzeRequest) -> SaltRecord:
 
 async def _run_salt_job(job_id: str, req: SaltAnalyzeRequest):
     try:
-        record = await _analyze_rust(req)
+        record = await _analyze_salt(req)
         await db.salt_jobs.update_one({"id": job_id}, {"$set": {"status": "done", "record_id": record.id, "finished_at": now_iso()}})
     except HTTPException as e:
         await db.salt_jobs.update_one({"id": job_id}, {"$set": {"status": "error", "error": str(e.detail), "finished_at": now_iso()}})
@@ -4573,6 +4577,27 @@ async def copper_label_ocr_start(req: LabelOcrRequest):
 @api_router.get("/copper/ocr/jobs/{job_id}", response_model=LabelOcrJob)
 async def copper_label_ocr_status(job_id: str):
     return await _label_ocr_status(job_id, db.copper_ocr_jobs)
+
+
+@api_router.post("/rust/ocr/start", response_model=LabelOcrJob)
+async def rust_label_ocr_start(req: LabelOcrRequest):
+    if not (req.image_path or "").strip():
+        raise HTTPException(status_code=400, detail="image_path wajib diisi")
+    return await _label_ocr_start(
+        req,
+        db.rust_ocr_jobs,
+        "Rust Preventing ASTM D1748 humidity-cabinet metal panel test. The photo shows a steel test "
+        "panel with a transparent 10x10 measuring grid; the sample code is HANDWRITTEN on a small WHITE "
+        "PAPER LABEL / sticker on or next to the panel, or written with marker directly on the panel. "
+        "Ignore the printed grid row letters (A-J) and column numbers (1-10). duration_hours = exposure time",
+        "48.9",
+        "168",
+    )
+
+
+@api_router.get("/rust/ocr/jobs/{job_id}", response_model=LabelOcrJob)
+async def rust_label_ocr_status(job_id: str):
+    return await _label_ocr_status(job_id, db.rust_ocr_jobs)
 
 
 

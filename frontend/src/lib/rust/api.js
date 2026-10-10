@@ -56,6 +56,21 @@ export async function analyzeRustWithPolling(payload, onTick) {
 
 const invalidate = (qc) => qc.invalidateQueries({ queryKey: ["rust"] });
 
+export async function ocrRustLabelWithPolling(image_path, onTick) {
+  const job = await postJson(`${RUST}/ocr/start`, { image_path });
+  const started = Date.now();
+  const deadline = started + 4 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await sleep(2000);
+    onTick?.(Math.round((Date.now() - started) / 1000));
+    let st;
+    try { st = await getJSON(`${RUST}/ocr/jobs/${job.id}`); } catch { continue; }
+    if (st.status === "done") return st.result || {};
+    if (st.status === "error") throw new Error(st.error || "OCR gagal membaca label.");
+  }
+  throw new Error("OCR memakan waktu terlalu lama. Coba foto label yang lebih jelas.");
+}
+
 export function useAnalyzeRust(onTick) {
   const qc = useQueryClient();
   return useMutation({ mutationFn: (payload) => analyzeRustWithPolling(payload, onTick), onSuccess: () => invalidate(qc) });
