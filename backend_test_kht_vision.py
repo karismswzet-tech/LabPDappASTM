@@ -11,7 +11,7 @@ from PIL import Image
 import io
 
 # Configuration
-BASE_URL = "https://webapp-rating.preview.emergentagent.com/api"
+BASE_URL = "https://astm-rating-app.preview.emergentagent.com/api"
 CREDENTIALS = {"username": "admin", "password": "admin123"}
 TEST_IMAGE_URL = "https://customer-assets-m6fa6gv7.emergentagent.net/job_signin-5app/artifacts/k3akmlwa_WhatsApp%20Image%202026-09-25%20at%2014.05.44.webp"
 

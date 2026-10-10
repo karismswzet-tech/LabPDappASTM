@@ -11,7 +11,7 @@ from PIL import Image
 import io
 
 # Backend URL
-BACKEND_URL = "https://webapp-rating.preview.emergentagent.com/api"
+BACKEND_URL = "https://astm-rating-app.preview.emergentagent.com/api"
 
 # Test credentials
 USERNAME = "admin"
