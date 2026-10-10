@@ -147,6 +147,17 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ POST-IMPORT BACKEND VERIFICATION COMPLETE — ALL 9 TESTS PASSED. Repository imported from https://github.com/karismswzet-tech/webapplandingpage5app.git. Backend service healthy and all auth/module endpoints working correctly. (1) Backend health: GET /api/→200 'Elastech Production API'✅. (2) Auth login scenarios: POST /api/auth/login with wrong password→401 'Username atau password salah'✅, with admin/admin123→200 {token,username:admin,ttl_minutes:60}✅. (3) Auth /me endpoint: GET /api/auth/me without token→401✅, with valid token→200 {username:admin,ttl_minutes:60}✅. (4) Route guard: GET /api/copper/dashboard without token→401✅, with token→200✅. (5) Module smoke routes ALL PASSED with auth token: GET /api/kht/dashboard→200✅, GET /api/dka/dashboard→200✅, GET /api/copper/dashboard→200✅, GET /api/htcbt/methods→200✅, GET /api/dkacec/methods→200✅. (6) Logout: POST /api/auth/logout→200 {ok:true}✅, reusing invalidated token on /api/auth/me→401✅. Backend logs verified: no startup errors, storage initialized successfully, demo data seeded (KHT tests, DKA batch, Copper Strip tests), application startup complete. All imported modules (KHT, DKA, Copper Strip, HTCBT, DKA-CEC) accessible and responding correctly. No demo data altered during testing. Credentials admin/admin123 working as expected."
+  - task: "Salt Spray — Kartu Pengamatan (Observation Cards) CRUD — /api/salt-spray/observations"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW feature under Salt Spray module. Manual observation cards: seq (nomor urut), duration_label (e.g. '6 Jam'), prefix (default 'RD-'), samples[] each {code, type:'S'|'D', photo_path}. Two auto groups derived by type (S & D). Collection salt_observations (separate; does NOT touch salt_tests). Endpoints: GET /api/salt-spray/observations (list sorted by seq asc), POST (create), GET/{id}, PUT/{id} (full upsert of seq/duration_label/prefix/samples), DELETE/{id} (soft delete). Samples cleaned server-side: empty codes dropped, type normalized to S/D. Photos uploaded via existing /api/kht/upload (photo_path stored). Verified via curl: list→[] then 200, create seq=7 '6 Jam' with 2 samples→200, delete→200. Needs backend testing for PUT update + validation + soft-delete + auth guard."
   - task: "DIP TEST In House Method module (whole-image 100-box) — /api/diptest/*"
     implemented: true
     working: true

@@ -3768,6 +3768,101 @@ async def salt_reference_scale():
     return {"title": "ASTM B117 Salt Spray 100-Box Scale", "measurement_area": "50 x 50 mm central surface", "plate": "60 x 80 mm; 0.5 mm cross cuts; 100 boxes of 5 x 5 mm", "grades": SALT_GRADES}
 
 
+# ---------------------------------------------------------------------------
+# Salt Spray — Kartu Pengamatan (Observation Cards)
+# Manual observation cards: nomor urut + durasi pengamatan + daftar kode sample
+# (tipe S atau D) dengan foto per sample. Dua grup otomatis (S & D).
+# ---------------------------------------------------------------------------
+class SaltObsSample(BaseModel):
+    code: str = ""
+    type: str = "S"  # 'S' atau 'D'
+    photo_path: Optional[str] = None
+
+
+class SaltObsCard(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    seq: int = 1
+    duration_label: str = ""
+    prefix: str = "RD-"
+    samples: List[SaltObsSample] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: Optional[str] = None
+    deleted_at: Optional[str] = None
+
+
+class SaltObsCardUpsert(BaseModel):
+    seq: int = 1
+    duration_label: str = ""
+    prefix: str = "RD-"
+    samples: List[SaltObsSample] = Field(default_factory=list)
+
+
+def _norm_obs_type(t: Optional[str]) -> str:
+    return "D" if str(t or "").strip().upper() == "D" else "S"
+
+
+def _clean_obs_samples(samples: List[SaltObsSample]) -> List[dict]:
+    out = []
+    for s in samples or []:
+        code = str(s.code or "").strip()
+        if not code:
+            continue
+        out.append({"code": code, "type": _norm_obs_type(s.type), "photo_path": s.photo_path or None})
+    return out
+
+
+@api_router.get("/salt-spray/observations", response_model=List[SaltObsCard])
+async def salt_obs_list():
+    docs = await db.salt_observations.find({"deleted_at": None}, {"_id": 0}).sort("seq", 1).to_list(500)
+    return [SaltObsCard(**doc) for doc in docs]
+
+
+@api_router.get("/salt-spray/observations/{card_id}", response_model=SaltObsCard)
+async def salt_obs_get(card_id: str):
+    doc = await db.salt_observations.find_one({"id": card_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    return SaltObsCard(**doc)
+
+
+@api_router.post("/salt-spray/observations", response_model=SaltObsCard)
+async def salt_obs_create(req: SaltObsCardUpsert):
+    card = SaltObsCard(
+        seq=int(req.seq or 1),
+        duration_label=str(req.duration_label or "").strip(),
+        prefix=str(req.prefix if req.prefix is not None else "RD-"),
+        samples=[SaltObsSample(**s) for s in _clean_obs_samples(req.samples)],
+    )
+    await db.salt_observations.insert_one(card.model_dump())
+    return card
+
+
+@api_router.put("/salt-spray/observations/{card_id}", response_model=SaltObsCard)
+async def salt_obs_update(card_id: str, req: SaltObsCardUpsert):
+    doc = await db.salt_observations.find_one({"id": card_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    changes = {
+        "seq": int(req.seq or 1),
+        "duration_label": str(req.duration_label or "").strip(),
+        "prefix": str(req.prefix if req.prefix is not None else "RD-"),
+        "samples": _clean_obs_samples(req.samples),
+        "updated_at": now_iso(),
+    }
+    await db.salt_observations.update_one({"id": card_id}, {"$set": changes})
+    updated = await db.salt_observations.find_one({"id": card_id}, {"_id": 0})
+    return SaltObsCard(**updated)
+
+
+@api_router.delete("/salt-spray/observations/{card_id}")
+async def salt_obs_delete(card_id: str):
+    res = await db.salt_observations.update_one({"id": card_id}, {"$set": {"deleted_at": now_iso()}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    return {"ok": True}
+
+
 COPPER_SEED = [
     {"sample_id": "CU-2026-05-30-001", "product": "Diesel Fuel B30", "batch": "LOT-CU-0530-A", "operator": "Karis Setia",
      "classification": "1a", "confidence": 97.4,
