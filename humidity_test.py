@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Configuration
-BASE_URL = "https://astm-rating-app.preview.emergentagent.com/api"
+BASE_URL = "https://rating-lab.preview.emergentagent.com/api"
 USERNAME = "admin"
 PASSWORD = "admin123"
 

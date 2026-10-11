@@ -41,6 +41,10 @@ Hash aktif di .env terverifikasi untuk password `admin123`.
 - Login admin/admin123 terverifikasi (HTTP 200). Demo data K-HTT, DKA, Copper Strip ter-seed otomatis.
 
 ## Re-import (2026-10-10b) dari github.com/riyadh-blip/Rating-AppASTM
-- .env dipulihkan via scripts/restore_env.sh; REACT_APP_BACKEND_URL di-set ke https://cd63c1bb-832f-44ba-a147-13ffb91ba04e.preview.emergentagent.com.
+- .env dipulihkan via scripts/restore_env.sh; REACT_APP_BACKEND_URL di-set ke https://rating-lab.preview.emergentagent.com.
 - EMERGENT_LLM_KEY dari backup aktif (tes LLM OK). DB_NAME=elastech_lab.
 - Login admin/admin123 terverifikasi (UI → /khtt).
+
+## Re-import (2026-10-11) dari github.com/karismswzet-tech/RatingAppASTMLab
+- .env dipulihkan via scripts/restore_env.sh; REACT_APP_BACKEND_URL di-set ke preview pod baru; DB_NAME=elastech_lab.
+- Login admin/admin123 terverifikasi.
