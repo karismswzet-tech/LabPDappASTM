@@ -271,3 +271,8 @@ Testing agent iteration_6.json: 20/20 pass. Confirmed: login sets HttpOnly cooki
 - Kartu: field Jam Pengamatan numerik (hours); duration_label = "<h> Jam"; backfill hours dari label lama.
 - Tabel report (frontend buildReport di lib/saltspray/obsReport.js): baris = kode sample (case/spasi-insensitive), kolom 0..192, berhenti di jam semua 100%, +24 jam sampai observasi terakhir bila >192; 100% merah; auto-isi 100% setelah tercapai.
 - Export PDF: Data Pengujian + Tabel Report + Kartu Pengamatan dalam satu dokumen.
+
+## 2026-10-12 — History Pengamatan (arsip seri Salt Spray)
+- Kartu Pengamatan: banner "Selesaikan & Simpan ke History" saat semua sample 100%; panel progress + "Hentikan & Arsipkan Seri" (force, peringatan) bila belum.
+- Backend: POST /api/salt-spray/observation-series/complete {force,note}, GET list, GET /{id} (+cards), DELETE /{id}, POST /{id}/reopen (409 jika ada kartu aktif), GET active-summary. Kartu arsip ditandai series_id (read-only, PUT 409). Header baru: kondisi chamber dibawa, operator/jam-tanggal mulai/grinding dikosongkan.
+- Frontend: tab History Pengamatan (stats, search, kartu seri dgn cover) + detail (header view, tabel, kurva recharts, galeri + lightbox, export PDF, buka kembali, hapus).

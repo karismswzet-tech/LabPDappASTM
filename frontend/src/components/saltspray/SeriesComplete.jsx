@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, Archive, CheckCircle2, Loader2, Trophy, X } from "lucide-react";
@@ -7,6 +7,12 @@ import { useCompleteSeries } from "@/lib/saltspray/series";
 import { fmtHour } from "@/lib/saltspray/obsReport";
 
 export function Modal({ open, onClose, children, testId, wide }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose} data-testid={testId}>

@@ -1,0 +1,29 @@
+{
+  "summary": "Verified Salt Spray History Pengamatan feature end-to-end. Backend (test_salt_obs_series.py, 1 test with 15+ assertions): active-summary, complete (409 pending / 400 empty / success all_reached / success stopped_early), header reset (conditions kept + per-run cleared), archived card PUT=409, list/detail, delete + 404, reopen (restores cards+header, 409 when active cards exist). Frontend UI: series-complete-banner shown on Kartu Pengamatan (all 4 samples 100% at 3 Jam), modal series-confirm with no warning, note textarea works, OK archives -> obs-empty shown. History page shows total/samples/done/avg stats correctly, series card lists SERI #3 with cover. Detail page shows title, header view, report table, progress-chart (recharts), gallery (4 photos), lightbox opens on photo click, PDF export fires without page errors, reopen confirm modal navigates back to Kartu Pengamatan with 4 cards restored & banner reappears. Final state verified via API: 4 real cards present, header operator='hendry' / start 2026-10-12 13:10 intact, 0 leftover test series.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ObsHistoryDetail progress-chart", "issues": ["Recharts emits width/height=-1 warning on initial mount (ResponsiveContainer parent has no explicit min size yet). Non-blocking; chart still renders after layout."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_salt_obs_series.py",
+    "/app/test_reports/pytest/salt_obs_series.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py salt_series_complete numbering uses find_one({'reopened': {'$ne': True}}). Reopen sets reopened=True AND deleted_at, so numbering excludes reopened series but still counts soft-deleted (non-reopened) series. Current real series got #3 which suggests at least 2 prior non-reopened series existed in DB history before this run (acceptable).",
+    "ObsHistoryDetail: when lightbox is open, Escape key does not close it (only backdrop click). Minor UX note — not a bug.",
+    "RustProgressChart recharts warning: wrap ResponsiveContainer with a parent that has explicit min-h to silence console warnings."
+  ],
+  "updated_files": ["/app/backend/tests/test_salt_obs_series.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin / admin123",
+  "seed_data_creation": "During test: archived user's real 4-card series to History (via UI + via pytest), created 1 temp partial-coverage card for 409/force flow, then deleted temp series and reopened real series. End state verified identical to start: 4 real cards (hours 0/1/2/3), header operator=hendry start=2026-10-12 13:10, History list empty.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_salt_obs_series.py is self-contained & idempotent: snapshots state, archives real series, creates temp card, exercises 409/400/success, then reopens real series in finally. Safe to re-run. If REACT_APP_BACKEND_URL changes, test picks it up from env or /app/frontend/.env.",
+  "rca of the issue": "N/A — feature works as specified."
+}

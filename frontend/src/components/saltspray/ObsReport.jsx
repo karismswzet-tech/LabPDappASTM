@@ -143,8 +143,8 @@ export function RustProgressChart({ report, colors }) {
   return (
     <Card data-testid="obs-progress-chart">
       <div className="mb-3 font-mono text-[11px] tracking-[0.15em] text-amber-400">KURVA PROGRESS KOROSI · % vs JAM</div>
-      <div className="h-72 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-72 min-h-[288px] w-full min-w-0">
+        <ResponsiveContainer width="100%" height={288} minWidth={200}>
           <LineChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: -12 }}>
             <CartesianGrid stroke="#3f3f46" strokeDasharray="3 3" />
             <XAxis dataKey="hour" stroke="#a1a1aa" tick={{ fontSize: 10, fontFamily: "monospace" }} />

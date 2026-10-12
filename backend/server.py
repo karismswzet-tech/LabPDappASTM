@@ -4304,7 +4304,7 @@ async def salt_series_complete(req: SaltObsCompleteRequest):
         raise HTTPException(status_code=409, detail=f"Belum semua sample 100%: {', '.join(pending) or '-'}")
     hdr_doc = await db.salt_obs_header.find_one({"id": "default"}, {"_id": 0, "id": 0}) or {}
     header = SaltObsHeader(**hdr_doc)
-    last = await db.salt_obs_series.find_one({"reopened": {"$ne": True}}, {"_id": 0, "number": 1}, sort=[("number", -1)])
+    last = await db.salt_obs_series.find_one({"deleted_at": None}, {"_id": 0, "number": 1}, sort=[("number", -1)])
     cover = next((c.get("photo_path") for c in reversed(cards) if c.get("photo_path")), None)
     series = SaltObsSeries(
         number=(last or {}).get("number", 0) + 1,
