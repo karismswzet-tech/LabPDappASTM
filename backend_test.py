@@ -10,7 +10,7 @@ from io import BytesIO
 from PIL import Image
 
 # Configuration
-BASE_URL = "https://rating-lab.preview.emergentagent.com/api"
+BASE_URL = "https://lpd-evaluator.preview.emergentagent.com/api"
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 

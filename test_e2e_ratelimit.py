@@ -11,7 +11,7 @@ from PIL import Image
 import io
 
 # Backend URL
-BACKEND_URL = "https://rating-lab.preview.emergentagent.com/api"
+BACKEND_URL = "https://lpd-evaluator.preview.emergentagent.com/api"
 
 # Test credentials
 USERNAME = "admin"
