@@ -265,3 +265,9 @@ Testing agent iteration_6.json: 20/20 pass. Confirmed: login sets HttpOnly cooki
 - Form: No. Urut, Durasi, Sample 1–4 kode manual; kotak merah bernomor bisa diklik inspector; reset ke AI.
 - Endpoint: POST /api/salt-spray/observations/detect/start, GET /api/salt-spray/observations/detect/jobs/{id}; CRUD /api/salt-spray/observations (photo_path + plates[4]).
 - Tipe S/D & prefix dihapus; kartu format lama di-soft-delete saat startup. Export PDF menampilkan foto + 4 overlay plat.
+
+## 2026-10-12 — Header Data Pengujian + Tabel Report (Kartu Pengamatan)
+- Header global (GET/PUT /api/salt-spray/observation-header, koleksi salt_obs_header id=default): operator, posisi specimen, pressure, water, temp chamber min-max, saturated air, pH, plat grinding (+ket). Duration otomatis (jam saat semua sample 100%).
+- Kartu: field Jam Pengamatan numerik (hours); duration_label = "<h> Jam"; backfill hours dari label lama.
+- Tabel report (frontend buildReport di lib/saltspray/obsReport.js): baris = kode sample (case/spasi-insensitive), kolom 0..192, berhenti di jam semua 100%, +24 jam sampai observasi terakhir bila >192; 100% merah; auto-isi 100% setelah tercapai.
+- Export PDF: Data Pengujian + Tabel Report + Kartu Pengamatan dalam satu dokumen.

@@ -1,0 +1,22 @@
+{
+  "summary": "Verified Salt Spray Kartu Pengamatan — Header DATA PENGUJIAN + TABEL REPORT + numeric Jam Pengamatan. 6/6 backend pytest cases pass. Frontend UI: header saves & persists after reload; report table renders rows per unique sample code; 100% cells are red; auto-fill of later-hour cells works; dynamic column extension to 216/240 when card at 240h exists; KARTU BARU draft hours pre-filled to nextReportHour (264 after 240); EXPORT PDF builds iframe with all 3 sections and no page errors. Test cards & header restored.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_salt_obs_header.py",
+    "/app/test_reports/pytest/salt_obs_header.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "obsReport.js buildReport: later card at same hour overwrites earlier (data[alias][h] = pctOf(p)). Current list sort is by hours then seq ascending — so highest-seq same-hour card wins; acceptable but worth documenting.",
+    "/salt-spray/observations save button is disabled while plates.length !== 4, so the hours-required toast error ('Isi Jam Pengamatan…') is only reachable in the edit path, not the draft path. Not a bug; just a UX note."
+  ],
+  "updated_files": ["/app/backend/tests/test_salt_obs_header.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin / admin123",
+  "seed_data_creation": "Created 3 TEST cards via API (hours 6, 24, 240) using plates copied from an existing new-format card; deleted all at end. Header set to TEST_UI_Operator / 15 psi during test, then restored to original.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_salt_obs_header.py is independent of AI vision (clones template plates). Safe to re-run. The original 3 user cards (hours 0, 1, 24) were preserved. If running UI tests, remember Observations page uses REPORT_HOURS = [0,1,2,3,4,5,6,24,...192] and dynamically appends +24 columns until the maxObserved hour.",
+  "rca of the issue": "N/A — all features working as per the spec."
+}
