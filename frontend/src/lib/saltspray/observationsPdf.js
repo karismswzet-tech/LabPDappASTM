@@ -1,5 +1,4 @@
 import { fileUrl, imageToDataUri } from "@/lib/kht/api";
-import { FULL_CORNERS, gradeSpecFor, renderOverlay } from "@/lib/saltspray/figure";
 import { buildReport, durationText, fmtHour, HEADER_DEFAULTS } from "@/lib/saltspray/obsReport";
 
 export { printHtmlOnWeb } from "@/lib/kht/pdf";
@@ -7,7 +6,18 @@ export { printHtmlOnWeb } from "@/lib/kht/pdf";
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 const styles = `
-  @page { margin: 12mm 10mm; size: A4; }
+  /* margin 0 hides the browser's URL/date/page-number header & footer; spacing comes from .pp spacer rows */
+  @page { margin: 0; size: A4; }
+  html, body { margin: 0; padding: 0; }
+  table.pp { width: 100%; border-collapse: collapse; }
+  table.pp > thead td, table.pp > tfoot td { height: 11mm; padding: 0; }
+  table.pp > tbody > tr > td { padding: 0 11mm; vertical-align: top; }
+  .gal { display: grid; gap: 3mm 4mm; }
+  .gcell { break-inside: avoid; min-width: 0; text-align: center; }
+  .gcell .gt { font-size: 10.5px; font-weight: 700; text-align: left; margin-bottom: 1mm; }
+  .gcell img { width: 100%; object-fit: contain; display: block; border: 1px solid #d4d4d8; background: #fafafa; }
+  .gcell .gc { font-size: 8.5px; color: #333; text-align: left; margin-top: 1mm; line-height: 1.3; }
+  .gal-page { break-before: page; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #111; margin: 0; }
   .doc-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
@@ -58,37 +68,31 @@ function reportHtml(report) {
 
 const wrap = (title, body) => `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${esc(title)}</title><style>${styles}</style></head><body>${body}</body></html>`;
 
-async function plateFigure(p) {
-  if (!p.crop_path) return null;
-  try {
-    const n = (p.grid_boxes || []).filter(Boolean).length;
-    const { dataUrl } = await renderOverlay(fileUrl(p.crop_path, 1000), FULL_CORNERS, p.grid_boxes, { method: "full", maxW: 700, label: p.code || `Sample ${p.index}` });
-    return { dataUrl, n };
-  } catch {
-    return null;
-  }
+function galleryLayout(n) {
+  const cols = n <= 2 ? 1 : n <= 6 ? 2 : 3;
+  const rows = Math.max(1, Math.ceil(n / cols));
+  // A4 297mm - 22mm page spacing - 10mm section title; reserve ~12mm per row for caption + gaps
+  const imgH = Math.max(28, Math.floor((297 - 22 - 10) / rows - 12));
+  return { cols, imgH };
 }
 
 export async function buildObservationsHtml(cards, header = {}, report = null) {
   const rep = report || buildReport(cards);
   const sorted = [...cards].sort((a, b) => (a.hours ?? 0) - (b.hours ?? 0) || (a.seq || 0) - (b.seq || 0));
-  const blocks = [];
+  const { cols, imgH } = galleryLayout(sorted.length);
+  const cells = [];
   for (const c of sorted) {
     let photo = null;
     if (c.photo_path) { try { photo = await imageToDataUri(fileUrl(c.photo_path, 1400)); } catch { /* skip */ } }
-    const cells = [];
-    for (const p of c.plates || []) {
-      const fig = await plateFigure(p);
-      const n = (p.grid_boxes || []).filter(Boolean).length;
-      const spec = gradeSpecFor(n);
-      cells.push(`<div class="cell">${fig ? `<img src="${esc(fig.dataUrl)}" alt="${esc(p.code)}"/>` : ""}
-        <div class="cap"><b>Sample ${p.index}: ${esc(p.code)}</b><br/>${n}/100 kotak berkarat · <span class="badge" style="background:${spec.color}">Grade ${spec.g}</span><br/>${esc(spec.label)}${p.edited ? " · dikoreksi inspector" : ""}</div></div>`);
-    }
-    blocks.push(`<div class="card">
-      <div class="title">${esc(c.seq)}. Pengamatan ${esc(c.duration_label)}</div>
-      ${photo ? `<img class="photo" src="${esc(photo)}" alt="foto 4 plat"/>` : ""}
-      <div class="row">${cells.join("")}</div>
+    const codes = (c.plates || []).map((p) => `${p.index}: ${esc(p.code)}`).join(" · ");
+    cells.push(`<div class="gcell">
+      <div class="gt">${esc(c.seq)}. Pengamatan ${esc(c.duration_label)}</div>
+      ${photo ? `<img src="${esc(photo)}" style="max-height:${imgH}mm" alt="foto 4 plat"/>` : `<div class="gc">tanpa foto</div>`}
+      ${codes ? `<div class="gc">${codes}</div>` : ""}
     </div>`);
   }
-  return wrap("Salt Spray — Kartu Pengamatan", `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10. Kotak merah bernomor = kotak berkarat.</div>${headerHtml(header, rep)}${reportHtml(rep)}<div class="page-break"></div><div class="sec">KARTU PENGAMATAN</div>${blocks.join("")}`);
+  const page1 = `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10.</div>${headerHtml(header, rep)}${reportHtml(rep)}`;
+  const gallery = cells.length ? `<div class="gal-page"><div class="sec">FOTO KARTU PENGAMATAN</div><div class="gal" style="grid-template-columns:repeat(${cols},minmax(0,1fr))">${cells.join("")}</div></div>` : "";
+  const body = `<table class="pp"><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot><tbody><tr><td>${page1}${gallery}</td></tr></tbody></table>`;
+  return wrap("Salt Spray — Kartu Pengamatan", body);
 }
