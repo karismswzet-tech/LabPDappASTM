@@ -37,12 +37,13 @@ function headerHtml(h, report) {
   const v = { ...HEADER_DEFAULTS, ...(h || {}) };
   const temp = v.chamber_temp_min || v.chamber_temp_max ? `${esc(v.chamber_temp_min)}°C - ${esc(v.chamber_temp_max)}°C` : "-";
   const grind = `${v.plate_grinding ? "Ya" : "Tidak"}${v.plate_grinding_note ? ` — ${esc(v.plate_grinding_note)}` : ""}`;
+  const start = [v.start_time, v.start_date ? new Date(`${v.start_date}T00:00:00`).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" }) : ""].filter(Boolean).join(", ") || "-";
   const rows = [
-    ["Nama Operator", esc(v.operator) || "-", "Temperatur Chamber", temp],
-    ["Posisi Specimen", esc(v.specimen_position), "Temperatur Saturated Air", esc(v.saturated_air_temp)],
-    ["Pressure Penguapan", esc(v.pressure), "Duration", `<b style="color:${report.allReached ? "#DC2626" : "#111"}">${esc(durationText(report))}</b>`],
-    ["Kandungan Water", esc(v.water), "pH", esc(v.ph)],
-    ["Plat Grinding", grind, "", ""],
+    ["Nama Operator", esc(v.operator) || "-", "Jam & Tanggal Mulai", esc(start)],
+    ["Posisi Specimen", esc(v.specimen_position), "Temperatur Chamber", temp],
+    ["Pressure Penguapan", esc(v.pressure), "Temperatur Saturated Air", esc(v.saturated_air_temp)],
+    ["Kandungan Water", esc(v.water), "Duration", `<b style="color:${report.allReached ? "#DC2626" : "#111"}">${esc(durationText(report))}</b>`],
+    ["pH", esc(v.ph), "Plat Grinding", grind],
   ];
   return `<div class="sec">DATA PENGUJIAN</div><table class="hdr">${rows.map((r) => `<tr><td class="k">${r[0]}</td><td>${r[1]}</td><td class="k">${r[2]}</td><td>${r[3]}</td></tr>`).join("")}</table>`;
 }

@@ -6,6 +6,8 @@ const LAST_BASE = 192;
 
 export const HEADER_DEFAULTS = {
   operator: "",
+  start_time: "",
+  start_date: "",
   specimen_position: "15°-30°",
   pressure: "13 psi",
   water: "10 L Aquadest + 530 gr NaCl 5%",

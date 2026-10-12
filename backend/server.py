@@ -4107,6 +4107,8 @@ def _obs_hours_fields(req: "SaltObsCardUpsert") -> dict:
 class SaltObsHeader(BaseModel):
     model_config = ConfigDict(extra="ignore")
     operator: str = ""
+    start_time: str = ""  # HH:MM
+    start_date: str = ""  # YYYY-MM-DD
     specimen_position: str = "15°-30°"
     pressure: str = "13 psi"
     water: str = "10 L Aquadest + 530 gr NaCl 5%"

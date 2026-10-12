@@ -33,6 +33,12 @@ export function ObsHeaderForm({ report }) {
       {isLoading ? <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-amber-400" /></div> : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="Nama Operator">{txt("operator", "obs-h-operator", "Nama operator")}</Field>
+          <Field label="Jam & Tanggal Mulai">
+            <div className="flex items-center gap-2">
+              <input type="time" value={f.start_time ?? ""} onChange={set("start_time")} className={`${inputCls} w-36 [color-scheme:dark]`} data-testid="obs-h-start-time" />
+              <input type="date" value={f.start_date ?? ""} onChange={set("start_date")} className={`${inputCls} [color-scheme:dark]`} data-testid="obs-h-start-date" />
+            </div>
+          </Field>
           <Field label="Posisi Specimen">{txt("specimen_position", "obs-h-position")}</Field>
           <Field label="Pressure Penguapan">{txt("pressure", "obs-h-pressure")}</Field>
           <Field label="Kandungan Water">{txt("water", "obs-h-water")}</Field>
