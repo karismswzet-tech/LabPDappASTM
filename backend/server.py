@@ -3936,6 +3936,7 @@ class SaltObsCard(BaseModel):
     detection: str = ""  # ai | fallback
     plates: List[SaltObsPlate] = Field(default_factory=list)
     ai_model: str = "gemini-3.1-pro-preview"
+    series_id: Optional[str] = None  # set when the series is archived to History Pengamatan
     created_at: str = Field(default_factory=now_iso)
     updated_at: Optional[str] = None
     deleted_at: Optional[str] = None
@@ -4146,9 +4147,12 @@ async def cleanup_legacy_obs_cards():
         await db.salt_observations.update_one({"id": d["id"]}, {"$set": {"hours": h}})
 
 
+ACTIVE_OBS_QUERY = {"deleted_at": None, "plates": {"$exists": True}, "series_id": None}
+
+
 @api_router.get("/salt-spray/observations", response_model=List[SaltObsCard])
 async def salt_obs_list():
-    docs = await db.salt_observations.find({"deleted_at": None, "plates": {"$exists": True}}, {"_id": 0}).sort([("hours", 1), ("seq", 1)]).to_list(500)
+    docs = await db.salt_observations.find(ACTIVE_OBS_QUERY, {"_id": 0}).sort([("hours", 1), ("seq", 1)]).to_list(500)
     return [SaltObsCard(**doc) for doc in docs]
 
 
@@ -4188,6 +4192,8 @@ async def salt_obs_update(card_id: str, req: SaltObsCardUpsert):
     doc = await db.salt_observations.find_one({"id": card_id, "deleted_at": None}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    if doc.get("series_id"):
+        raise HTTPException(status_code=409, detail="Kartu sudah diarsipkan di History Pengamatan (read-only).")
     _validate_obs(req)
     changes = {
         "seq": int(req.seq or 1),
@@ -4207,6 +4213,158 @@ async def salt_obs_delete(card_id: str):
     res = await db.salt_observations.update_one({"id": card_id}, {"$set": {"deleted_at": now_iso()}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Salt Spray — History Pengamatan (archived observation series)
+# 1 seri = snapshot header Data Pengujian + semua kartu pengamatan aktif.
+# ---------------------------------------------------------------------------
+HEADER_CARRY_FIELDS = ("specimen_position", "pressure", "water", "chamber_temp_min", "chamber_temp_max", "saturated_air_temp", "ph")
+
+
+def _obs_series_summary(cards: list) -> dict:
+    """Python twin of frontend buildReport(): per-sample reach-100% hour, latest %, duration."""
+    data, order, alias = {}, [], {}
+    for c in sorted(cards, key=lambda c: ((c.get("hours") if c.get("hours") is not None else -1), c.get("seq") or 0)):
+        h = c.get("hours")
+        if h is None:
+            continue
+        for p in c.get("plates") or []:
+            raw = re.sub(r"\s+", " ", str(p.get("code") or "").strip())
+            if not raw:
+                continue
+            key = raw.upper()
+            if key not in alias:
+                alias[key] = raw
+                data[raw] = {}
+                order.append(raw)
+            data[alias[key]][float(h)] = min(100, sum(1 for b in (p.get("grid_boxes") or []) if b))
+    samples = []
+    for code in order:
+        hs = sorted(data[code])
+        reach = next((h for h in hs if data[code][h] >= 100), None)
+        samples.append({"code": code, "reach_hour": reach, "last_pct": 100 if reach is not None else (data[code][hs[-1]] if hs else 0)})
+    all_reached = bool(samples) and all(s["reach_hour"] is not None for s in samples)
+    hours = [float(c["hours"]) for c in cards if c.get("hours") is not None]
+    return {
+        "samples": samples,
+        "all_reached": all_reached,
+        "duration_hours": max(s["reach_hour"] for s in samples) if all_reached else None,
+        "max_hours": max(hours) if hours else None,
+    }
+
+
+class SaltObsSeriesSample(BaseModel):
+    code: str
+    reach_hour: Optional[float] = None
+    last_pct: float = 0
+
+
+class SaltObsSeries(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    number: int = 1
+    header: SaltObsHeader = Field(default_factory=SaltObsHeader)
+    samples: List[SaltObsSeriesSample] = Field(default_factory=list)
+    all_reached: bool = False
+    stopped_early: bool = False
+    duration_hours: Optional[float] = None
+    max_hours: Optional[float] = None
+    card_count: int = 0
+    cover_photo_path: Optional[str] = None
+    note: str = ""
+    completed_at: str = Field(default_factory=now_iso)
+    deleted_at: Optional[str] = None
+
+
+class SaltObsSeriesDetail(SaltObsSeries):
+    cards: List[SaltObsCard] = Field(default_factory=list)
+
+
+class SaltObsCompleteRequest(BaseModel):
+    force: bool = False
+    note: str = ""
+
+
+@api_router.get("/salt-spray/observation-series/active-summary")
+async def salt_series_active_summary():
+    cards = await db.salt_observations.find(ACTIVE_OBS_QUERY, {"_id": 0}).to_list(500)
+    return {**_obs_series_summary(cards), "card_count": len(cards)}
+
+
+@api_router.post("/salt-spray/observation-series/complete", response_model=SaltObsSeries)
+async def salt_series_complete(req: SaltObsCompleteRequest):
+    cards = await db.salt_observations.find(ACTIVE_OBS_QUERY, {"_id": 0}).sort([("hours", 1), ("seq", 1)]).to_list(500)
+    if not cards:
+        raise HTTPException(status_code=400, detail="Belum ada kartu pengamatan untuk diselesaikan.")
+    summary = _obs_series_summary(cards)
+    if not summary["all_reached"] and not req.force:
+        pending = [s["code"] for s in summary["samples"] if s["reach_hour"] is None]
+        raise HTTPException(status_code=409, detail=f"Belum semua sample 100%: {', '.join(pending) or '-'}")
+    hdr_doc = await db.salt_obs_header.find_one({"id": "default"}, {"_id": 0, "id": 0}) or {}
+    header = SaltObsHeader(**hdr_doc)
+    last = await db.salt_obs_series.find_one({"reopened": {"$ne": True}}, {"_id": 0, "number": 1}, sort=[("number", -1)])
+    cover = next((c.get("photo_path") for c in reversed(cards) if c.get("photo_path")), None)
+    series = SaltObsSeries(
+        number=(last or {}).get("number", 0) + 1,
+        header=header,
+        samples=[SaltObsSeriesSample(**s) for s in summary["samples"]],
+        all_reached=summary["all_reached"],
+        stopped_early=not summary["all_reached"],
+        duration_hours=summary["duration_hours"],
+        max_hours=summary["max_hours"],
+        card_count=len(cards),
+        cover_photo_path=cover,
+        note=req.note.strip(),
+    )
+    await db.salt_obs_series.insert_one(series.model_dump())
+    await db.salt_observations.update_many({"id": {"$in": [c["id"] for c in cards]}}, {"$set": {"series_id": series.id}})
+    # Fresh header for the next series: keep chamber conditions, clear per-run fields.
+    fresh = SaltObsHeader().model_dump()
+    for k in HEADER_CARRY_FIELDS:
+        fresh[k] = getattr(header, k)
+    fresh["updated_at"] = now_iso()
+    await db.salt_obs_header.update_one({"id": "default"}, {"$set": fresh}, upsert=True)
+    return series
+
+
+@api_router.get("/salt-spray/observation-series", response_model=List[SaltObsSeries])
+async def salt_series_list():
+    docs = await db.salt_obs_series.find({"deleted_at": None}, {"_id": 0}).sort("completed_at", -1).to_list(500)
+    return [SaltObsSeries(**d) for d in docs]
+
+
+@api_router.get("/salt-spray/observation-series/{series_id}", response_model=SaltObsSeriesDetail)
+async def salt_series_get(series_id: str):
+    doc = await db.salt_obs_series.find_one({"id": series_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Seri pengujian tidak ditemukan")
+    cards = await db.salt_observations.find({"series_id": series_id, "deleted_at": None}, {"_id": 0}).sort([("hours", 1), ("seq", 1)]).to_list(500)
+    return SaltObsSeriesDetail(**doc, cards=[SaltObsCard(**c) for c in cards])
+
+
+@api_router.delete("/salt-spray/observation-series/{series_id}")
+async def salt_series_delete(series_id: str):
+    ts = now_iso()
+    res = await db.salt_obs_series.update_one({"id": series_id, "deleted_at": None}, {"$set": {"deleted_at": ts}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Seri pengujian tidak ditemukan")
+    await db.salt_observations.update_many({"series_id": series_id, "deleted_at": None}, {"$set": {"deleted_at": ts}})
+    return {"ok": True}
+
+
+@api_router.post("/salt-spray/observation-series/{series_id}/reopen")
+async def salt_series_reopen(series_id: str):
+    doc = await db.salt_obs_series.find_one({"id": series_id, "deleted_at": None}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Seri pengujian tidak ditemukan")
+    if await db.salt_observations.count_documents(ACTIVE_OBS_QUERY) > 0:
+        raise HTTPException(status_code=409, detail="Kartu Pengamatan masih berisi seri aktif. Selesaikan atau kosongkan dulu sebelum membuka kembali.")
+    await db.salt_observations.update_many({"series_id": series_id, "deleted_at": None}, {"$set": {"series_id": None}})
+    hdr = {**SaltObsHeader(**(doc.get("header") or {})).model_dump(), "updated_at": now_iso()}
+    await db.salt_obs_header.update_one({"id": "default"}, {"$set": hdr}, upsert=True)
+    await db.salt_obs_series.update_one({"id": series_id}, {"$set": {"deleted_at": now_iso(), "reopened": True}})
     return {"ok": True}
 
 

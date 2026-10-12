@@ -1,12 +1,13 @@
 import React from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Gauge, PlusCircle, History, TrendingUp, Grid3X3, ClipboardList } from "lucide-react";
+import { Gauge, PlusCircle, History, TrendingUp, Grid3X3, ClipboardList, Archive } from "lucide-react";
 import { KhtHeader } from "@/components/kht/ui";
 
 export const SALT_TABS = [
   { to: "/salt-spray", label: "Dashboard", icon: Gauge, end: true, title: "Salt Spray ASTM B117", subtitle: "100-Box Metal Panel Inspection" },
   { to: "/salt-spray/new", label: "New Inspection", icon: PlusCircle, title: "New Inspection", subtitle: "ASTM B117 AI Vision" },
   { to: "/salt-spray/observations", label: "Kartu Pengamatan", icon: ClipboardList, title: "Kartu Pengamatan", subtitle: "1 foto 4 plat · AI Vision Seluruh Gambar 10×10" },
+  { to: "/salt-spray/observation-history", label: "History Pengamatan", icon: Archive, title: "History Pengamatan", subtitle: "Arsip seri uji salt spray" },
   { to: "/salt-spray/history", label: "History", icon: History, title: "Inspection History", subtitle: "Salt spray records" },
   { to: "/salt-spray/trend", label: "Trend", icon: TrendingUp, title: "Analytics & Trend", subtitle: "Rusted boxes over time" },
   { to: "/salt-spray/grid-scale", label: "100-Grid Scale", icon: Grid3X3, title: "100-Grid Scale Standard", subtitle: "ASTM B117 counting reference" },

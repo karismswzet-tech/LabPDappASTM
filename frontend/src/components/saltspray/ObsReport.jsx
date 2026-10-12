@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Card } from "@/components/kht/ui";
 import { useObsHeader, useSaveObsHeader } from "@/lib/saltspray/observations";
 import { durationText, fmtHour, HEADER_DEFAULTS } from "@/lib/saltspray/obsReport";
+import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const inputCls = "h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-sm text-zinc-50 outline-none placeholder:text-zinc-600 focus:border-amber-500";
 
@@ -106,6 +107,55 @@ export function ObsReportTable({ report }) {
           </table>
         </div>
       )}
+    </Card>
+  );
+}
+
+export function ObsHeaderView({ header, report, durationLabel }) {
+  const v = { ...HEADER_DEFAULTS, ...(header || {}) };
+  const start = [v.start_date ? new Date(`${v.start_date}T00:00:00`).toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" }) : "", v.start_time].filter(Boolean).join(" · ") || "-";
+  const items = [
+    ["Nama Operator", v.operator || "-"], ["Jam & Tanggal Mulai", start],
+    ["Posisi Specimen", v.specimen_position], ["Pressure Penguapan", v.pressure],
+    ["Kandungan Water", v.water], ["Temperatur Chamber", v.chamber_temp_min || v.chamber_temp_max ? `${v.chamber_temp_min}°C – ${v.chamber_temp_max}°C` : "-"],
+    ["Temperatur Saturated Air", v.saturated_air_temp], ["pH", v.ph],
+    ["Plat Grinding", `${v.plate_grinding ? "Ya" : "Tidak"}${v.plate_grinding_note ? ` — ${v.plate_grinding_note}` : ""}`],
+  ];
+  return (
+    <Card data-testid="obs-header-view">
+      <div className="mb-3 flex items-center gap-2 font-mono text-[11px] tracking-[0.15em] text-amber-400"><FileSpreadsheet className="h-4 w-4" />DATA PENGUJIAN</div>
+      <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-zinc-700 bg-zinc-700 sm:grid-cols-2">
+        {items.map(([k, val]) => (
+          <div key={k} className="bg-zinc-900 px-3 py-2"><div className="font-mono text-[9px] tracking-widest text-zinc-500">{k.toUpperCase()}</div><div className="font-mono text-sm text-zinc-100">{val}</div></div>
+        ))}
+        <div className="bg-zinc-900 px-3 py-2"><div className="font-mono text-[9px] tracking-widest text-zinc-500">DURATION</div><div className={`font-mono text-sm font-bold ${report.allReached ? "text-red-400" : "text-orange-300"}`} data-testid="obs-header-view-duration">{durationLabel || durationText(report)}</div></div>
+      </div>
+    </Card>
+  );
+}
+
+export function RustProgressChart({ report, colors }) {
+  const data = report.cols.map((h, i) => {
+    const row = { hour: fmtHour(h) };
+    report.rows.forEach((r) => { row[r.code] = r.cells[i] ? r.cells[i].value : null; });
+    return row;
+  });
+  return (
+    <Card data-testid="obs-progress-chart">
+      <div className="mb-3 font-mono text-[11px] tracking-[0.15em] text-amber-400">KURVA PROGRESS KOROSI · % vs JAM</div>
+      <div className="h-72 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: -12 }}>
+            <CartesianGrid stroke="#3f3f46" strokeDasharray="3 3" />
+            <XAxis dataKey="hour" stroke="#a1a1aa" tick={{ fontSize: 10, fontFamily: "monospace" }} />
+            <YAxis domain={[0, 100]} stroke="#a1a1aa" tick={{ fontSize: 10, fontFamily: "monospace" }} unit="%" />
+            <Tooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontFamily: "monospace", fontSize: 11 }} labelFormatter={(l) => `${l} Jam`} formatter={(v) => `${v}%`} />
+            <Legend wrapperStyle={{ fontFamily: "monospace", fontSize: 10 }} />
+            <ReferenceLine y={100} stroke="#ef4444" strokeDasharray="4 4" />
+            {report.rows.map((r, i) => <Line key={r.code} type="monotone" dataKey={r.code} stroke={colors[i % colors.length]} strokeWidth={2} dot={{ r: 3 }} connectNulls isAnimationActive />)}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </Card>
   );
 }

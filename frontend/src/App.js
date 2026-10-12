@@ -52,6 +52,8 @@ import SaltTrend from "@/pages/saltspray/Trend";
 import SaltResult from "@/pages/saltspray/Result";
 import SaltScale from "@/pages/saltspray/Scale";
 import SaltObservations from "@/pages/saltspray/Observations";
+import SaltObsHistory from "@/pages/saltspray/ObsHistory";
+import SaltObsHistoryDetail from "@/pages/saltspray/ObsHistoryDetail";
 import HumidityLayout from "@/pages/humidity/HumidityLayout";
 import HumidityDashboard from "@/pages/humidity/Dashboard";
 import HumidityNewTest from "@/pages/humidity/NewTest";
@@ -124,6 +126,8 @@ function App() {
                 <Route index element={<SaltDashboard />} />
                 <Route path="new" element={<SaltNewTest />} />
                 <Route path="observations" element={<SaltObservations />} />
+                <Route path="observation-history" element={<SaltObsHistory />} />
+                <Route path="observation-history/:id" element={<SaltObsHistoryDetail />} />
                 <Route path="history" element={<SaltHistory />} />
                 <Route path="trend" element={<SaltTrend />} />
                 <Route path="grid-scale" element={<SaltScale />} />

@@ -10,6 +10,7 @@ import { buildObservationsHtml, printHtmlOnWeb } from "@/lib/saltspray/observati
 import { nextReportHour, REPORT_HOURS } from "@/lib/saltspray/obsReport";
 import { ObsHeaderForm, ObsReportTable } from "@/components/saltspray/ObsReport";
 import { buildReport } from "@/lib/saltspray/obsReport";
+import { SeriesCompletePanel } from "@/components/saltspray/SeriesComplete";
 
 const PLATE_COLORS = ["#F59E0B", "#22D3EE", "#A78BFA", "#34D399"];
 const inputCls = "h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-sm text-zinc-50 outline-none placeholder:text-zinc-600 focus:border-amber-500";
@@ -248,6 +249,7 @@ export default function SaltObservations() {
       <datalist id="obs-known-codes">{report.samples.map((c) => <option key={c} value={c} />)}</datalist>
       <ObsHeaderForm report={report} />
       <ObsReportTable report={report} />
+      <SeriesCompletePanel report={report} cardCount={cards.length} />
       <div className="mt-2 flex items-center gap-2 font-mono text-[11px] tracking-[0.15em] text-amber-400"><ClipboardList className="h-4 w-4" /> DAFTAR KARTU PENGAMATAN</div>
 
       {draft && <CardEditor key={draft.key} card={draft} draft onDone={() => setDraft(null)} />}
