@@ -60,3 +60,11 @@ export async function detectPlatesWithPolling(photoPath, onTick) {
 }
 
 export const countBoxes = (boxes) => (boxes || []).filter(Boolean).length;
+
+export const SALT_OBS_HEADER = `${API}/salt-spray/observation-header`;
+export const useObsHeader = () => useQuery({ queryKey: ["salt-obs-header"], queryFn: () => getJSON(SALT_OBS_HEADER) });
+export function useSaveObsHeader() {
+  const qc = useQueryClient();
+  return useMutation({ mutationFn: (body) => send(SALT_OBS_HEADER, "PUT", body), onSuccess: (d) => qc.setQueryData(["salt-obs-header"], d) });
+}
+export const fetchObsHeader = () => getJSON(SALT_OBS_HEADER);

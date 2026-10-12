@@ -1,5 +1,6 @@
 import { fileUrl, imageToDataUri } from "@/lib/kht/api";
 import { FULL_CORNERS, gradeSpecFor, renderOverlay } from "@/lib/saltspray/figure";
+import { buildReport, durationText, fmtHour, HEADER_DEFAULTS } from "@/lib/saltspray/obsReport";
 
 export { printHtmlOnWeb } from "@/lib/kht/pdf";
 
@@ -20,7 +21,39 @@ const styles = `
   .cap { font-size: 10px; margin-top: 3px; line-height: 1.35; }
   .cap b { font-size: 11px; }
   .badge { display: inline-block; padding: 0 5px; border-radius: 3px; color: #111; font-weight: 700; }
+  .sec { font-size: 12px; font-weight: 700; margin: 10px 0 6px; letter-spacing: .04em; }
+  table.hdr { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 10px; }
+  table.hdr td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; }
+  table.hdr td.k { background: #f4f4f5; font-weight: 600; width: 22%; }
+  table.rep { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 16px; }
+  table.rep th, table.rep td { border: 1px solid #999; padding: 3px 2px; text-align: center; }
+  table.rep th { background: #e4e4e7; }
+  table.rep td.s { text-align: left; font-weight: 700; padding-left: 5px; white-space: nowrap; }
+  table.rep td.r { color: #DC2626; font-weight: 700; }
+  .page-break { break-before: page; }
 `;
+
+function headerHtml(h, report) {
+  const v = { ...HEADER_DEFAULTS, ...(h || {}) };
+  const temp = v.chamber_temp_min || v.chamber_temp_max ? `${esc(v.chamber_temp_min)}°C - ${esc(v.chamber_temp_max)}°C` : "-";
+  const grind = `${v.plate_grinding ? "Ya" : "Tidak"}${v.plate_grinding_note ? ` — ${esc(v.plate_grinding_note)}` : ""}`;
+  const rows = [
+    ["Nama Operator", esc(v.operator) || "-", "Temperatur Chamber", temp],
+    ["Posisi Specimen", esc(v.specimen_position), "Temperatur Saturated Air", esc(v.saturated_air_temp)],
+    ["Pressure Penguapan", esc(v.pressure), "Duration", `<b style="color:${report.allReached ? "#DC2626" : "#111"}">${esc(durationText(report))}</b>`],
+    ["Kandungan Water", esc(v.water), "pH", esc(v.ph)],
+    ["Plat Grinding", grind, "", ""],
+  ];
+  return `<div class="sec">DATA PENGUJIAN</div><table class="hdr">${rows.map((r) => `<tr><td class="k">${r[0]}</td><td>${r[1]}</td><td class="k">${r[2]}</td><td>${r[3]}</td></tr>`).join("")}</table>`;
+}
+
+function reportHtml(report) {
+  const { cols, rows } = report;
+  if (!rows.length) return `<div class="sec">TABEL REPORT</div><div class="cap">Belum ada data.</div>`;
+  const head = `<tr><th rowspan="2">No</th><th rowspan="2">Sample</th><th colspan="${cols.length}">Hours</th></tr><tr>${cols.map((h) => `<th>${fmtHour(h)}</th>`).join("")}</tr>`;
+  const body = rows.map((r) => `<tr><td>${r.no}</td><td class="s">${esc(r.code)}</td>${r.cells.map((c) => (c ? `<td class="${c.value >= 100 ? "r" : ""}">${c.value}%</td>` : "<td>–</td>")).join("")}</tr>`).join("");
+  return `<div class="sec">TABEL REPORT · % KOTAK BERKARAT</div><table class="rep">${head}${body}</table>`;
+}
 
 const wrap = (title, body) => `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${esc(title)}</title><style>${styles}</style></head><body>${body}</body></html>`;
 
@@ -35,8 +68,9 @@ async function plateFigure(p) {
   }
 }
 
-export async function buildObservationsHtml(cards) {
-  const sorted = [...cards].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+export async function buildObservationsHtml(cards, header = {}, report = null) {
+  const rep = report || buildReport(cards);
+  const sorted = [...cards].sort((a, b) => (a.hours ?? 0) - (b.hours ?? 0) || (a.seq || 0) - (b.seq || 0));
   const blocks = [];
   for (const c of sorted) {
     let photo = null;
@@ -55,5 +89,5 @@ export async function buildObservationsHtml(cards) {
       <div class="row">${cells.join("")}</div>
     </div>`);
   }
-  return wrap("Salt Spray — Kartu Pengamatan", `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10. Kotak merah bernomor = kotak berkarat.</div>${blocks.join("")}`);
+  return wrap("Salt Spray — Kartu Pengamatan", `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10. Kotak merah bernomor = kotak berkarat.</div>${headerHtml(header, rep)}${reportHtml(rep)}<div class="page-break"></div><div class="sec">KARTU PENGAMATAN</div>${blocks.join("")}`);
 }

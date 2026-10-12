@@ -1,12 +1,15 @@
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { Camera, ClipboardList, FileDown, ImageIcon, Loader2, Plus, RefreshCw, RotateCcw, Save, ScanSearch, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/kht/ui";
 import { CameraCapture } from "@/components/kht/capture";
 import { fileUrl, gradeForCount, SALT_GRADES, uploadImage } from "@/lib/saltspray/api";
 import { pickPreview } from "@/lib/kht/api";
-import { countBoxes, detectPlatesWithPolling, useCreateObservation, useDeleteObservation, useObservations, useUpdateObservation } from "@/lib/saltspray/observations";
+import { countBoxes, detectPlatesWithPolling, fetchObsHeader, useCreateObservation, useDeleteObservation, useObservations, useUpdateObservation } from "@/lib/saltspray/observations";
 import { buildObservationsHtml, printHtmlOnWeb } from "@/lib/saltspray/observationsPdf";
+import { nextReportHour, REPORT_HOURS } from "@/lib/saltspray/obsReport";
+import { ObsHeaderForm, ObsReportTable } from "@/components/saltspray/ObsReport";
+import { buildReport } from "@/lib/saltspray/obsReport";
 
 const PLATE_COLORS = ["#F59E0B", "#22D3EE", "#A78BFA", "#34D399"];
 const inputCls = "h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 font-mono text-sm text-zinc-50 outline-none placeholder:text-zinc-600 focus:border-amber-500";
@@ -46,7 +49,7 @@ function PlateCard({ plate, i, onCode, onToggle, onReset }) {
         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-mono text-[11px] font-bold text-zinc-950" style={{ background: PLATE_COLORS[i] }}>{i + 1}</span>
         <span className="font-mono text-[11px] font-bold tracking-widest text-zinc-200">SAMPLE {i + 1}</span>
       </div>
-      <input value={plate.code || ""} onChange={(e) => onCode(e.target.value)} placeholder={plate.label ? `contoh: ${plate.label}` : "Kode sample"} className={inputCls} data-testid={`obs-plate-code-${i + 1}`} />
+      <input value={plate.code || ""} onChange={(e) => onCode(e.target.value)} placeholder={plate.label ? `contoh: ${plate.label}` : "Kode sample"} list="obs-known-codes" className={inputCls} data-testid={`obs-plate-code-${i + 1}`} />
       <PlateGrid src={plate.crop_path ? fileUrl(plate.crop_path, 900) : null} boxes={plate.grid_boxes} onToggle={onToggle} testId={`obs-plate-grid-${i + 1}`} />
       <div className="flex items-center justify-between gap-2">
         <div className="font-mono text-xs text-zinc-200"><span className="text-lg font-bold text-white" data-testid={`obs-plate-count-${i + 1}`}>{n}</span>/100</div>
@@ -70,7 +73,7 @@ function CardEditor({ card, draft = false, onDone }) {
   const del = useDeleteObservation();
   const galleryRef = useRef(null);
   const [seq, setSeq] = useState(String(card.seq ?? 1));
-  const [duration, setDuration] = useState(card.duration_label || "");
+  const [hours, setHours] = useState(card.hours == null ? "" : String(card.hours));
   const [photoPath, setPhotoPath] = useState(card.photo_path || null);
   const [preview, setPreview] = useState(card.photo_path ? fileUrl(card.photo_path, 1600) : null);
   const [plates, setPlates] = useState(card.plates || []);
@@ -128,7 +131,8 @@ function CardEditor({ card, draft = false, onDone }) {
     if (!photoPath || plates.length !== 4) { toast.error("Upload foto 4 plat dan tunggu deteksi selesai."); return; }
     const missing = plates.findIndex((p) => !String(p.code || "").trim());
     if (missing >= 0) { toast.error(`Isi kode Sample ${missing + 1} dulu.`); return; }
-    const body = { seq: Number(seq) || 1, duration_label: duration.trim(), photo_path: photoPath, detection, plates };
+    if (hours === "" || Number.isNaN(Number(hours)) || Number(hours) < 0) { toast.error("Isi Jam Pengamatan (angka jam, mis. 24)."); return; }
+    const body = { seq: Number(seq) || 1, hours: Number(hours), duration_label: `${Number(hours)} Jam`, photo_path: photoPath, detection, plates };
     try {
       if (draft) { await create.mutateAsync(body); toast.success("Kartu pengamatan tersimpan."); onDone?.(); }
       else { await update.mutateAsync({ id: card.id, body }); toast.success("Kartu pengamatan diperbarui."); }
@@ -148,9 +152,10 @@ function CardEditor({ card, draft = false, onDone }) {
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex w-24 flex-col gap-1"><span className="font-mono text-[10px] text-zinc-400">No. Urut</span>
           <input type="number" min={1} value={seq} onChange={(e) => setSeq(e.target.value)} className={inputCls} data-testid="obs-seq" /></label>
-        <label className="flex min-w-[160px] flex-1 flex-col gap-1"><span className="font-mono text-[10px] text-zinc-400">Durasi Pengamatan</span>
-          <input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="contoh: 24 Jam" list="obs-durations" className={inputCls} data-testid="obs-duration" /></label>
-        <datalist id="obs-durations"><option value="6 Jam" /><option value="24 Jam" /><option value="48 Jam" /><option value="72 Jam" /><option value="96 Jam" /></datalist>
+        <label className="flex min-w-[160px] flex-1 flex-col gap-1"><span className="font-mono text-[10px] text-zinc-400">Jam Pengamatan (Hours)</span>
+          <div className="relative"><input type="number" min={0} step="any" value={hours} onChange={(e) => setHours(e.target.value)} placeholder="pilih / ketik jam, mis. 24" list="obs-hours-list" className={`${inputCls} pr-14`} data-testid="obs-hours" />
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 font-mono text-xs text-zinc-500">Jam</span></div></label>
+        <datalist id="obs-hours-list">{REPORT_HOURS.map((h) => <option key={h} value={h} />)}</datalist>
         {draft && <span className="rounded bg-amber-500/20 px-2 py-1 font-mono text-[10px] font-bold tracking-widest text-amber-400">KARTU BARU · BELUM DISIMPAN</span>}
       </div>
 
@@ -213,17 +218,19 @@ export default function SaltObservations() {
   const { data, isLoading } = useObservations();
   const [draft, setDraft] = useState(null);
   const [exporting, setExporting] = useState(false);
-  const cards = data || [];
+  const cards = useMemo(() => data || [], [data]);
+  const report = useMemo(() => buildReport(cards), [cards]);
 
   function addCard() {
     if (draft) { toast.info("Selesaikan atau batalkan kartu baru terlebih dahulu."); return; }
     const nextSeq = cards.reduce((m, c) => Math.max(m, c.seq || 0), 0) + 1;
-    setDraft({ key: Date.now(), seq: nextSeq, duration_label: "", plates: [] });
+    setDraft({ key: Date.now(), seq: nextSeq, hours: nextReportHour(cards), plates: [] });
   }
   async function exportPdf() {
     if (!cards.length) { toast.info("Belum ada kartu untuk diexport."); return; }
     setExporting(true);
-    try { printHtmlOnWeb(await buildObservationsHtml(cards)); toast.success("Menyiapkan PDF — pilih \"Save as PDF\" di dialog print."); }
+    try { const header = await fetchObsHeader().catch(() => ({}));
+      printHtmlOnWeb(await buildObservationsHtml(cards, header, report)); toast.success("Menyiapkan PDF — pilih \"Save as PDF\" di dialog print."); }
     catch (e) { toast.error(String(e?.message || "Gagal export PDF").slice(0, 120)); }
     finally { setExporting(false); }
   }
@@ -237,6 +244,11 @@ export default function SaltObservations() {
           <button type="button" onClick={exportPdf} disabled={exporting || !cards.length} data-testid="obs-export-pdf" className="flex h-10 items-center gap-2 rounded-md border border-amber-500/60 px-4 font-mono text-xs font-bold tracking-widest text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">{exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}EXPORT PDF</button>
         </div>
       </div>
+
+      <datalist id="obs-known-codes">{report.samples.map((c) => <option key={c} value={c} />)}</datalist>
+      <ObsHeaderForm report={report} />
+      <ObsReportTable report={report} />
+      <div className="mt-2 flex items-center gap-2 font-mono text-[11px] tracking-[0.15em] text-amber-400"><ClipboardList className="h-4 w-4" /> DAFTAR KARTU PENGAMATAN</div>
 
       {draft && <CardEditor key={draft.key} card={draft} draft onDone={() => setDraft(null)} />}
 

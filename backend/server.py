@@ -3931,6 +3931,7 @@ class SaltObsCard(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     seq: int = 1
     duration_label: str = ""
+    hours: Optional[float] = None  # jam pengamatan (kolom Hours di tabel report)
     photo_path: Optional[str] = None
     detection: str = ""  # ai | fallback
     plates: List[SaltObsPlate] = Field(default_factory=list)
@@ -3943,6 +3944,7 @@ class SaltObsCard(BaseModel):
 class SaltObsCardUpsert(BaseModel):
     seq: int = 1
     duration_label: str = ""
+    hours: Optional[float] = None
     photo_path: Optional[str] = None
     detection: str = ""
     plates: List[SaltObsPlate] = Field(default_factory=list)
@@ -4080,17 +4082,71 @@ async def salt_obs_detect_status(job_id: str):
     return SaltObsJob(**doc)
 
 
+def _obs_parse_hours(label) -> Optional[float]:
+    m = re.search(r"(\d+(?:[.,]\d+)?)", str(label or ""))
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", "."))
+    if re.search(r"hari|day", str(label), re.I):
+        v *= 24
+    return v
+
+
+def _fmt_hours(h: float) -> str:
+    return str(int(h)) if float(h).is_integer() else str(round(h, 2))
+
+
+def _obs_hours_fields(req: "SaltObsCardUpsert") -> dict:
+    hours = req.hours if req.hours is not None else _obs_parse_hours(req.duration_label)
+    if hours is not None:
+        hours = max(0.0, float(hours))
+        return {"hours": hours, "duration_label": f"{_fmt_hours(hours)} Jam"}
+    return {"hours": None, "duration_label": str(req.duration_label or "").strip()}
+
+
+class SaltObsHeader(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    operator: str = ""
+    specimen_position: str = "15°-30°"
+    pressure: str = "13 psi"
+    water: str = "10 L Aquadest + 530 gr NaCl 5%"
+    chamber_temp_min: str = "35.1"
+    chamber_temp_max: str = "36.7"
+    saturated_air_temp: str = "46°C"
+    ph: str = "6.5 - 7.2 di suhu 35°C"
+    plate_grinding: bool = False
+    plate_grinding_note: str = ""
+    updated_at: Optional[str] = None
+
+
+@api_router.get("/salt-spray/observation-header", response_model=SaltObsHeader)
+async def salt_obs_header_get():
+    doc = await db.salt_obs_header.find_one({"id": "default"}, {"_id": 0, "id": 0})
+    return SaltObsHeader(**(doc or {}))
+
+
+@api_router.put("/salt-spray/observation-header", response_model=SaltObsHeader)
+async def salt_obs_header_put(req: SaltObsHeader):
+    data = {k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()}
+    data["updated_at"] = now_iso()
+    await db.salt_obs_header.update_one({"id": "default"}, {"$set": data}, upsert=True)
+    return SaltObsHeader(**data)
+
+
 async def cleanup_legacy_obs_cards():
     """Old manual-format cards (per-sample photos, S/D types) are retired."""
     res = await db.salt_observations.update_many(
         {"plates": {"$exists": False}, "deleted_at": None}, {"$set": {"deleted_at": now_iso()}})
     if res.modified_count:
         logger.info("Retired %d legacy salt observation cards", res.modified_count)
+    async for d in db.salt_observations.find({"plates": {"$exists": True}, "hours": {"$exists": False}}, {"_id": 0, "id": 1, "duration_label": 1}):
+        h = _obs_parse_hours(d.get("duration_label"))
+        await db.salt_observations.update_one({"id": d["id"]}, {"$set": {"hours": h}})
 
 
 @api_router.get("/salt-spray/observations", response_model=List[SaltObsCard])
 async def salt_obs_list():
-    docs = await db.salt_observations.find({"deleted_at": None, "plates": {"$exists": True}}, {"_id": 0}).sort("seq", 1).to_list(500)
+    docs = await db.salt_observations.find({"deleted_at": None, "plates": {"$exists": True}}, {"_id": 0}).sort([("hours", 1), ("seq", 1)]).to_list(500)
     return [SaltObsCard(**doc) for doc in docs]
 
 
@@ -4116,7 +4172,7 @@ async def salt_obs_create(req: SaltObsCardUpsert):
     _validate_obs(req)
     card = SaltObsCard(
         seq=int(req.seq or 1),
-        duration_label=str(req.duration_label or "").strip(),
+        **_obs_hours_fields(req),
         photo_path=req.photo_path,
         detection=req.detection or "",
         plates=[SaltObsPlate(**p) for p in _clean_obs_plates(req.plates)],
@@ -4133,7 +4189,7 @@ async def salt_obs_update(card_id: str, req: SaltObsCardUpsert):
     _validate_obs(req)
     changes = {
         "seq": int(req.seq or 1),
-        "duration_label": str(req.duration_label or "").strip(),
+        **_obs_hours_fields(req),
         "photo_path": req.photo_path,
         "detection": req.detection or doc.get("detection", ""),
         "plates": _clean_obs_plates(req.plates),
