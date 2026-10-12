@@ -3774,13 +3774,156 @@ async def salt_reference_scale():
 
 # ---------------------------------------------------------------------------
 # Salt Spray — Kartu Pengamatan (Observation Cards)
-# Manual observation cards: nomor urut + durasi pengamatan + daftar kode sample
-# (tipe S atau D) dengan foto per sample. Dua grup otomatis (S & D).
+# 1 foto berisi 4 plat uji -> AI Vision mendeteksi & memotong 4 plat -> tiap plat
+# dinilai dengan Metode Seluruh Gambar (potongan plat = active zone, 10x10 rata).
+# Kotak berkarat ditandai (merah bernomor) dan dapat dikoreksi inspector.
+# 1 record = 1 foto + 4 kode sample (Sample 1..4) + No. Urut + Durasi.
 # ---------------------------------------------------------------------------
-class SaltObsSample(BaseModel):
+OBS_PLATE_COUNT = 4
+
+SALT_OBS_DETECT_PROMPT = """You are a senior corrosion-laboratory analyst (ASTM B117 salt spray) preparing panels for rating.
+
+The image is ONE operator photo that should contain FOUR flat metal test panels (plates) photographed together after salt-spray exposure. They are usually placed side by side in one row, but may also be in a column or a 2 x 2 layout.
+
+TASK: locate every test panel precisely.
+- For each panel return box_2d = [ymin, xmin, ymax, xmax] as integers 0-1000 relative to the full image (y down, x right).
+- The box must hug the panel's own metal edges tightly: include the full panel surface (all four edges and corners), exclude table/background, shadows, rulers, holders and neighbouring panels.
+- Boxes of different panels must NOT overlap. One object per physical panel. Never split one panel into two, never merge two panels.
+- Ignore labels/tape/handwriting as separate objects (they belong to the panel they are on).
+- Order the panels in reading order: top-to-bottom rows, then left-to-right inside a row.
+
+Return ONLY valid minified JSON:
+{"panel_count":<integer>,"layout":"row|column|grid|other","panels":[{"index":1,"box_2d":[ymin,xmin,ymax,xmax],"label":"<visible handwritten/printed code on the panel, or empty>"}]}"""
+
+SALT_OBS_GRADE_PROMPT = """You are a SENIOR, highly experienced metallurgical corrosion analyst rating ONE ASTM B117 salt-spray test panel. Rate like a meticulous professional inspector: careful, consistent, conservative, and never guessing.
+
+You receive TWO images of the SAME single panel:
+1) IMAGE 1 = clean photo of the panel (use it to judge true colour/texture of corrosion).
+2) IMAGE 2 = the same photo with a reference 10 x 10 grid drawn on top; every box carries its number 1-100.
+
+METHOD — WHOLE IMAGE (Seluruh Gambar):
+- The ACTIVE ZONE is the ENTIRE image. It is divided evenly into 10 x 10 = 100 boxes, each box = 10% of image width x 10% of image height.
+- Box 1 = top-left, box 10 = top-right, box 91 = bottom-left, box 100 = bottom-right (row-major). Box number = row*10 + column + 1 (row, column starting at 0). Do NOT rotate or re-frame.
+
+PROFESSIONAL RATING PROCEDURE (do it internally, row by row):
+1. Scan row 1 (boxes 1-10) left to right, then row 2 (11-20) ... until row 10 (91-100). Inspect each box in IMAGE 1, use IMAGE 2 only to know the box boundaries/numbers.
+2. A box is RUSTED when it contains at least one naked-eye-visible corrosion product ON THE METAL PANEL: red rust, orange/brown rust spots, rust bloom, rust streaks/run-off, creep from scribe or edges, pitting with rust, or blistering with rust staining. Even one small genuine rust spot makes the box rusted.
+3. If one rust area crosses a box boundary, every box it touches is rusted.
+4. NOT rust: glare, specular reflections, water droplets, salt deposits (white), white/grey zinc corrosion without red-brown colour, shadows, dust, fingerprints, scratches without rust, handwritten marks, label tape, holes, the grid lines/numbers drawn in IMAGE 2, and any background outside the panel.
+5. Boxes that show only background (not panel) are never rusted.
+6. Double-check your list against IMAGE 1 before answering; remove anything you are not confident is real corrosion, and add any spot you missed.
+
+GRADE RULES: A = 0 rusted boxes; B = 1-10; C = 11-25; D = 26-50; E = 51-100.
+
+Return ONLY valid minified JSON with EXACTLY these keys:
+{"rusted_boxes":[<sorted unique box numbers 1-100 that are rusted>],"rusted_box_count":<integer = length of rusted_boxes>,"grade":"A|B|C|D|E","confidence":<number 0-100>,"specimen_box_count":<boxes containing any panel surface>,"rust_spread":"<none|localized|scattered|clustered|widespread|near-total>","summary":"<short professional Indonesian note: where the rust is (rows/columns/edges), type and severity>"}"""
+
+
+def _obs_font(sz: int):
+    try:
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", sz)
+    except Exception:
+        try:
+            return ImageFont.load_default(sz)
+        except Exception:
+            return ImageFont.load_default()
+
+
+def _obs_grid_overlay(content: bytes) -> bytes:
+    """Draw the numbered 10x10 reference grid over a plate crop (helps the AI localise boxes)."""
+    im = PILImage.open(io.BytesIO(content)).convert("RGB")
+    W, H = im.size
+    d = ImageDraw.Draw(im)
+    lw = max(1, round(min(W, H) / 400))
+    for i in range(1, 10):
+        x = round(W * i / 10)
+        y = round(H * i / 10)
+        d.line([(x, 0), (x, H)], fill=(0, 230, 255), width=lw)
+        d.line([(0, y), (W, y)], fill=(0, 230, 255), width=lw)
+    d.rectangle([0, 0, W - 1, H - 1], outline=(0, 230, 255), width=lw)
+    fnt = _obs_font(max(9, round(min(W, H) / 10 * 0.22)))
+    for n in range(100):
+        r, c = divmod(n, 10)
+        d.text((W * c / 10 + 3, H * r / 10 + 2), str(n + 1), font=fnt, fill=(255, 255, 0), stroke_width=2, stroke_fill=(0, 0, 0))
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
+def _obs_norm_panels(ai: dict) -> list:
+    panels = []
+    for p in (ai or {}).get("panels") or []:
+        try:
+            y0, x0, y1, x1 = [max(0.0, min(1000.0, float(v))) / 1000 for v in p.get("box_2d")]
+        except Exception:
+            continue
+        if x1 - x0 < 0.03 or y1 - y0 < 0.03:
+            continue
+        panels.append({"bbox": [x0, y0, x1 - x0, y1 - y0], "label": str(p.get("label") or "").strip()})
+    return panels
+
+
+def _obs_sort_key(p: dict):
+    x, y, w, h = p["bbox"]
+    return (round((y + h / 2) / 0.25), x)
+
+
+def _obs_boxes_from_ai(ai: dict) -> List[bool]:
+    boxes = [False] * 100
+    nums = ai.get("rusted_boxes") if isinstance(ai, dict) else None
+    if isinstance(nums, list) and nums and not isinstance(nums[0], bool):
+        for v in nums:
+            try:
+                n = int(float(v))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= n <= 100:
+                boxes[n - 1] = True
+        return boxes
+    b, _ = _salt_grid_from_ai({"grid_boxes": ai.get("grid_boxes") or nums or [], "rusted_box_count": ai.get("rusted_box_count", 0)})
+    return b
+
+
+async def run_obs_detect(image_b64: str) -> list:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"salt-obs-detect-{uuid.uuid4()}",
+        system_message="You are a precise object-localisation model for laboratory test panels. Output JSON only.",
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+    resp = await _llm_send_with_retry(chat, UserMessage(text=SALT_OBS_DETECT_PROMPT, file_contents=[ImageContent(image_base64=image_b64)]))
+    return _obs_norm_panels(_parse_ai_json(resp if isinstance(resp, str) else str(resp)))
+
+
+async def run_obs_grade(clean_b64: str, grid_b64: str) -> dict:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"salt-obs-grade-{uuid.uuid4()}",
+        system_message="You are a senior ASTM B117 corrosion analyst. You rate meticulously and output JSON only.",
+    ).with_model("gemini", "gemini-3.1-pro-preview")
+    resp = await _llm_send_with_retry(chat, UserMessage(
+        text=SALT_OBS_GRADE_PROMPT,
+        file_contents=[ImageContent(image_base64=clean_b64), ImageContent(image_base64=grid_b64)],
+    ))
+    return _parse_ai_json(resp if isinstance(resp, str) else str(resp))
+
+
+class SaltObsPlate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    index: int = 1
     code: str = ""
-    type: str = "S"  # 'S' atau 'D'
-    photo_path: Optional[str] = None
+    bbox: Optional[List[float]] = None  # [x, y, w, h] normalized in the original photo
+    crop_path: Optional[str] = None
+    label: str = ""  # label read by AI on the panel (hint only)
+    grid_boxes: List[bool] = Field(default_factory=lambda: [False] * 100)
+    ai_grid_boxes: Optional[List[bool]] = None
+    rusted_box_count: int = 0
+    grade: str = "A"
+    ai_rusted_box_count: Optional[int] = None
+    ai_grade: Optional[str] = None
+    confidence: float = 0
+    rust_spread: str = ""
+    summary: str = ""
+    edited: bool = False
 
 
 class SaltObsCard(BaseModel):
@@ -3788,8 +3931,10 @@ class SaltObsCard(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     seq: int = 1
     duration_label: str = ""
-    prefix: str = "RD-"
-    samples: List[SaltObsSample] = Field(default_factory=list)
+    photo_path: Optional[str] = None
+    detection: str = ""  # ai | fallback
+    plates: List[SaltObsPlate] = Field(default_factory=list)
+    ai_model: str = "gemini-3.1-pro-preview"
     created_at: str = Field(default_factory=now_iso)
     updated_at: Optional[str] = None
     deleted_at: Optional[str] = None
@@ -3798,27 +3943,154 @@ class SaltObsCard(BaseModel):
 class SaltObsCardUpsert(BaseModel):
     seq: int = 1
     duration_label: str = ""
-    prefix: str = "RD-"
-    samples: List[SaltObsSample] = Field(default_factory=list)
+    photo_path: Optional[str] = None
+    detection: str = ""
+    plates: List[SaltObsPlate] = Field(default_factory=list)
 
 
-def _norm_obs_type(t: Optional[str]) -> str:
-    return "D" if str(t or "").strip().upper() == "D" else "S"
+class SaltObsDetectRequest(BaseModel):
+    photo_path: str
 
 
-def _clean_obs_samples(samples: List[SaltObsSample]) -> List[dict]:
-    out = []
-    for s in samples or []:
-        code = str(s.code or "").strip()
-        if not code:
-            continue
-        out.append({"code": code, "type": _norm_obs_type(s.type), "photo_path": s.photo_path or None})
-    return out
+class SaltObsJob(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    status: str = "running"
+    stage: str = "Mendeteksi plat…"
+    photo_path: str = ""
+    detection: str = ""
+    plates: List[SaltObsPlate] = Field(default_factory=list)
+    error: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+    finished_at: Optional[str] = None
+
+
+def _norm_plate(p: SaltObsPlate, i: int) -> dict:
+    boxes = [bool(v) for v in (p.grid_boxes or [])[:100]]
+    boxes.extend([False] * (100 - len(boxes)))
+    ai_boxes = p.ai_grid_boxes
+    if ai_boxes is not None:
+        ai_boxes = [bool(v) for v in ai_boxes[:100]] + [False] * max(0, 100 - len(ai_boxes))
+    count = sum(boxes)
+    ai_count = sum(ai_boxes) if ai_boxes is not None else count
+    return {
+        **p.model_dump(),
+        "index": i + 1,
+        "code": str(p.code or "").strip(),
+        "grid_boxes": boxes,
+        "ai_grid_boxes": ai_boxes if ai_boxes is not None else list(boxes),
+        "rusted_box_count": count,
+        "grade": salt_grade_for(count),
+        "ai_rusted_box_count": ai_count,
+        "ai_grade": salt_grade_for(ai_count),
+        "edited": ai_boxes is not None and boxes != ai_boxes,
+    }
+
+
+def _clean_obs_plates(plates: List[SaltObsPlate]) -> List[dict]:
+    return [_norm_plate(p, i) for i, p in enumerate((plates or [])[:OBS_PLATE_COUNT])]
+
+
+def _obs_prepare_crops(content: bytes, panels: list) -> tuple:
+    """Return (detection_mode, [(bbox, crop_bytes, label)]) for exactly 4 plates."""
+    detection = "ai"
+    items = []
+    if len(panels) == OBS_PLATE_COUNT:
+        for p in sorted(panels, key=_obs_sort_key):
+            try:
+                items.append((p["bbox"], _crop_bbox(content, p["bbox"], pad=0.0), p["label"]))
+            except Exception:
+                items = []
+                break
+    if len(items) != OBS_PLATE_COUNT:
+        detection = "fallback"
+        items = [([i / OBS_PLATE_COUNT, 0.0, 1 / OBS_PLATE_COUNT, 1.0], _crop_column(content, i, OBS_PLATE_COUNT), "") for i in range(OBS_PLATE_COUNT)]
+    return detection, items
+
+
+async def _obs_grade_one(crop: bytes) -> dict:
+    small = await run_in_threadpool(_downscale_for_ai, crop, 1600)
+    grid = await run_in_threadpool(_obs_grid_overlay, small)
+    return await run_obs_grade(base64.b64encode(small).decode("utf-8"), base64.b64encode(grid).decode("utf-8"))
+
+
+async def _run_obs_detect_job(job_id: str, photo_path: str):
+    async def stage(text):
+        await db.salt_obs_jobs.update_one({"id": job_id}, {"$set": {"stage": text}})
+    try:
+        try:
+            content, _ = await run_in_threadpool(get_object, photo_path)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Foto tidak ditemukan di storage")
+        small = await run_in_threadpool(_downscale_for_ai, content, 2200)
+        try:
+            panels = await run_obs_detect(base64.b64encode(small).decode("utf-8"))
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                raise HTTPException(status_code=502, detail=friendly_ai_error(e))
+            logger.warning("Salt obs plate detection failed; using column fallback", exc_info=True)
+            panels = []
+        detection, items = await run_in_threadpool(_obs_prepare_crops, content, panels)
+        await stage(f"{'4 plat terdeteksi' if detection == 'ai' else 'Plat dibagi 4 kolom'} — menilai kotak berkarat…")
+        try:
+            results = await asyncio.gather(*[_obs_grade_one(crop) for _, crop, _ in items])
+        except Exception as e:
+            logger.exception("Salt obs plate grading failed")
+            raise HTTPException(status_code=502, detail=f"AI Vision gagal menilai plat: {friendly_ai_error(e)}")
+        plates = []
+        for i, ((bbox, crop, label), ai) in enumerate(zip(items, results)):
+            crop_path = f"{APP_NAME}/salt/observations/{job_id}/plate_{i + 1}.jpg"
+            try:
+                await run_in_threadpool(put_object, crop_path, crop, "image/jpeg")
+            except Exception:
+                logger.warning("Could not store salt obs crop", exc_info=True)
+                crop_path = None
+            boxes = _obs_boxes_from_ai(ai)
+            plates.append(_norm_plate(SaltObsPlate(
+                bbox=[round(float(v), 4) for v in bbox], crop_path=crop_path, label=label,
+                grid_boxes=boxes, ai_grid_boxes=list(boxes), confidence=_clamp(ai.get("confidence"), 0, 100),
+                rust_spread=str(ai.get("rust_spread", "")), summary=str(ai.get("summary", "")),
+            ), i))
+        await db.salt_obs_jobs.update_one({"id": job_id}, {"$set": {
+            "status": "done", "stage": "Selesai", "detection": detection, "plates": plates, "finished_at": now_iso()}})
+    except HTTPException as e:
+        await db.salt_obs_jobs.update_one({"id": job_id}, {"$set": {"status": "error", "error": str(e.detail), "finished_at": now_iso()}})
+    except Exception as e:
+        logger.exception("salt obs detect job failed")
+        await db.salt_obs_jobs.update_one({"id": job_id}, {"$set": {"status": "error", "error": friendly_ai_error(e), "finished_at": now_iso()}})
+
+
+@api_router.post("/salt-spray/observations/detect/start", response_model=SaltObsJob)
+async def salt_obs_detect_start(req: SaltObsDetectRequest):
+    try:
+        await run_in_threadpool(get_object, req.photo_path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Foto tidak ditemukan di storage")
+    job = SaltObsJob(photo_path=req.photo_path)
+    await db.salt_obs_jobs.insert_one(job.model_dump())
+    asyncio.create_task(_run_obs_detect_job(job.id, req.photo_path))
+    return job
+
+
+@api_router.get("/salt-spray/observations/detect/jobs/{job_id}", response_model=SaltObsJob)
+async def salt_obs_detect_status(job_id: str):
+    doc = await db.salt_obs_jobs.find_one({"id": job_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job tidak ditemukan")
+    return SaltObsJob(**doc)
+
+
+async def cleanup_legacy_obs_cards():
+    """Old manual-format cards (per-sample photos, S/D types) are retired."""
+    res = await db.salt_observations.update_many(
+        {"plates": {"$exists": False}, "deleted_at": None}, {"$set": {"deleted_at": now_iso()}})
+    if res.modified_count:
+        logger.info("Retired %d legacy salt observation cards", res.modified_count)
 
 
 @api_router.get("/salt-spray/observations", response_model=List[SaltObsCard])
 async def salt_obs_list():
-    docs = await db.salt_observations.find({"deleted_at": None}, {"_id": 0}).sort("seq", 1).to_list(500)
+    docs = await db.salt_observations.find({"deleted_at": None, "plates": {"$exists": True}}, {"_id": 0}).sort("seq", 1).to_list(500)
     return [SaltObsCard(**doc) for doc in docs]
 
 
@@ -3830,13 +4102,24 @@ async def salt_obs_get(card_id: str):
     return SaltObsCard(**doc)
 
 
+def _validate_obs(req: SaltObsCardUpsert):
+    if not req.photo_path:
+        raise HTTPException(status_code=400, detail="Foto 4 plat wajib diunggah.")
+    if len(req.plates or []) != OBS_PLATE_COUNT:
+        raise HTTPException(status_code=400, detail="Hasil deteksi harus berisi 4 plat.")
+    if any(not str(p.code or "").strip() for p in req.plates):
+        raise HTTPException(status_code=400, detail="Kode Sample 1-4 wajib diisi.")
+
+
 @api_router.post("/salt-spray/observations", response_model=SaltObsCard)
 async def salt_obs_create(req: SaltObsCardUpsert):
+    _validate_obs(req)
     card = SaltObsCard(
         seq=int(req.seq or 1),
         duration_label=str(req.duration_label or "").strip(),
-        prefix=str(req.prefix if req.prefix is not None else "RD-"),
-        samples=[SaltObsSample(**s) for s in _clean_obs_samples(req.samples)],
+        photo_path=req.photo_path,
+        detection=req.detection or "",
+        plates=[SaltObsPlate(**p) for p in _clean_obs_plates(req.plates)],
     )
     await db.salt_observations.insert_one(card.model_dump())
     return card
@@ -3847,11 +4130,13 @@ async def salt_obs_update(card_id: str, req: SaltObsCardUpsert):
     doc = await db.salt_observations.find_one({"id": card_id, "deleted_at": None}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Kartu pengamatan tidak ditemukan")
+    _validate_obs(req)
     changes = {
         "seq": int(req.seq or 1),
         "duration_label": str(req.duration_label or "").strip(),
-        "prefix": str(req.prefix if req.prefix is not None else "RD-"),
-        "samples": _clean_obs_samples(req.samples),
+        "photo_path": req.photo_path,
+        "detection": req.detection or doc.get("detection", ""),
+        "plates": _clean_obs_plates(req.plates),
         "updated_at": now_iso(),
     }
     await db.salt_observations.update_one({"id": card_id}, {"$set": changes})
@@ -5440,6 +5725,10 @@ async def startup():
     await seed_dka()
     await seed_copper_reference()
     await seed_copper()
+    try:
+        await cleanup_legacy_obs_cards()
+    except Exception:
+        logger.warning("legacy obs cleanup failed", exc_info=True)
 
 
 @app.on_event("shutdown")

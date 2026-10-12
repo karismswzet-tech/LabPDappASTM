@@ -41,7 +41,22 @@ export function useDeleteObservation() {
   });
 }
 
-export function obsGroupLabel(prefix, samples) {
-  if (!samples || !samples.length) return "";
-  return `${prefix || ""}{${samples.map((s) => `${s.code} (${s.type})`).join(",  ")}}`;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Upload-ready photo path -> AI detects 4 plates + rates each (whole-image 10x10). */
+export async function detectPlatesWithPolling(photoPath, onTick) {
+  const job = await send(`${SALT_OBS}/detect/start`, "POST", { photo_path: photoPath });
+  const started = Date.now();
+  const deadline = started + 8 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await sleep(2500);
+    let status;
+    try { status = await getJSON(`${SALT_OBS}/detect/jobs/${job.id}`); } catch { continue; }
+    onTick?.(Math.round((Date.now() - started) / 1000), status.stage);
+    if (status.status === "done") return status;
+    if (status.status === "error") throw new Error(status.error || "AI Vision gagal mendeteksi plat.");
+  }
+  throw new Error("Deteksi AI terlalu lama. Coba lagi dengan foto yang lebih jelas.");
 }
+
+export const countBoxes = (boxes) => (boxes || []).filter(Boolean).length;
