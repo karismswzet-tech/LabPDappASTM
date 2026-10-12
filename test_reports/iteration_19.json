@@ -1,0 +1,35 @@
+{
+  "summary": "End-to-end verification of Salt Spray 'Kartu Pengamatan' (1 photo = 4 plates) feature. BACKEND pytest 5/5 (/app/backend/tests/test_salt_observations.py): validation 400s (missing photo_path, plates!=4, empty code), GET list returns only new-format cards with 4 plates & 100 grid_boxes each, full detect roundtrip (POST /salt-spray/observations/detect/start -> poll /detect/jobs/{id} ~2min, real Gemini) returned status=done + detection='ai' + 4 plates with bbox/crop_path/grid_boxes[100]/ai_grid_boxes[100]/rusted_box_count/grade/confidence/summary, grade matched count buckets (A=0, B=1-10, C=11-25, D=26-50, E=51+), POST creates card with edited=False (grid==ai), PUT toggles one box -> rusted_box_count+1 & edited=True & grade recomputed, DELETE soft-removes and GET returns 404 and card is excluded from list. Elapsed 118s with 1 AI call. FRONTEND /salt-spray/observations: seeded card (seq 1, '24 Jam', codes 251360/251361/251362/251363) renders photo with 4 colored bbox labels, 4 plate cards with 100-cell grids, counts/grades (48/D, 8/B, 50/D, 11/C), summary + confidence. Toggling box-50 decremented count 48->47 and showed 'Dikoreksi inspector · AI: N' with reset button; reset restored 47->48. KARTU BARU -> draft; BATAL cancels; uploading fixture /app/tests/fixtures/saltspray_four_plates.jpg triggered 'obs-detect-stage' and in ~2min produced 4 AI-detected plates (obs-detection-mode='AI: 4 PLAT TERDETEKSI'); saving with empty codes showed 'Isi kode Sample' toast; filling codes ZZTEST_1..4 + SIMPAN KARTU replaced draft with saved card; after reload the codes persisted; cleaned up with DELETE 200. Export PDF uses iframe (not popup) and did not crash; zero console errors throughout. AI budget consumed this run: 2 Gemini jobs (1 backend pytest + 1 frontend upload) = 8 panel grading calls + 2 detection calls.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Salt Spray > Kartu Pengamatan header", "issues": ["Subtitle in /app/frontend/src/pages/saltspray/SaltLayout.jsx line 9 still reads 'Observasi per durasi (grup S & D)' — the S/D grouping was removed per the new design (1 foto = 4 plates). Suggest changing to 'Observasi per durasi — 1 foto berisi 4 plat uji'."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_salt_observations.py",
+    "/app/test_reports/pytest/salt_observations.xml"
+  ],
+  "action_items": [
+    "(cosmetic) Update subtitle in SaltLayout.jsx: remove outdated 'grup S & D' wording from Kartu Pengamatan nav/header."
+  ],
+  "critical_code_review_comments": [
+    "Backend _validate_obs correctly enforces photo_path, plates==4 and non-empty codes; grade recomputation + edited flag are server-authoritative in _norm_plate (good).",
+    "cleanup_legacy_obs_cards at startup soft-deletes any pre-plates records (plates missing) — list query filters {plates: {$exists: true}} to double-guard. Idempotent.",
+    "_run_obs_detect_job uses asyncio.gather over 4 _obs_grade_one tasks (parallel Gemini calls); error path writes job.status='error' with friendly message — verified by polling path. Rate-limit detection raises 502 cleanly.",
+    "server.py now at 5737 lines; split into module files remains overdue (noted since iter 18)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_salt_observations.py",
+    "/app/tests/fixtures/saltspray_four_plates.jpg (newly composed 4-panel fixture from saltspray_panel.jpg)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (seeded render + toggle/reset + draft + validation + upload+detect+save+reload persistence + export)"},
+  "test_credentials": "admin / admin123",
+  "seed_data_creation": "Backend pytest creates a TEST_SMP_* card then deletes it in-test (net 0 added). Frontend test created a ZZTEST_* card then DELETE'd it via API cleanup (net 0 added). Pre-existing seeded card (seq 1, codes 251360-251363) left intact.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable pytest at /app/backend/tests/test_salt_observations.py (set addopts='' to bypass xdist). Fixture /app/tests/fixtures/saltspray_four_plates.jpg (2168x560, 4 panels side-by-side composed from saltspray_panel.jpg) is now committed and reused by both backend AI test & frontend upload. Detection endpoint takes ~90-120s with real Gemini — poll up to 240s. Frontend testids verified live: obs-add-card, obs-card-draft, obs-card-<id>, obs-photo-input, obs-photo-bbox-{1..4}, obs-detect-stage, obs-detection-mode, obs-redetect, obs-change-photo, obs-plates, obs-plate-{1..4}, obs-plate-code-{1..4}, obs-plate-grid-{1..4}-box-{1..100}, obs-plate-count-{1..4}, obs-plate-grade-{1..4}, obs-plate-reset-{1..4}, obs-save, obs-delete, obs-export-pdf. Export PDF uses hidden iframe (printHtmlOnWeb in /app/frontend/src/lib/kht/pdf.js) — do NOT expect page.expect_popup() to fire; verify 'did not crash' via absence of console errors instead. Login via POST /api/auth/login sets HttpOnly cookie 'elastech_session' — use requests.Session or playwright same-origin fetch with credentials:'include'.",
+  "rca of the issue": "No bugs encountered. Only observation: 'Observasi per durasi (grup S & D)' subtitle is stale copy — predates the new 1-photo/4-plate design and should be updated for consistency with new PRD wording. Not blocking."
+}

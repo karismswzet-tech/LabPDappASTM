@@ -258,3 +258,10 @@ Testing agent iteration_6.json: 20/20 pass. Confirmed: login sets HttpOnly cooki
   isi form otomatis (Sample ID tidak ditimpa bila user sudah mengetik).
 - get_object menolak path kosong; /rust/analyze/start & /rust/ocr/start → 400 bila image_path kosong.
 - Fixture: tests/fixtures/rust_panel.jpg; pytest backend/tests/test_rust_fix_and_ocr.py.
+
+## 2026-10-12 — Salt Spray Kartu Pengamatan (1 foto = 4 plat)
+- Upload 1 foto 4 plat → Gemini 3.1 Pro mendeteksi box_2d tiap plat (urutan baca) → crop → tiap plat dinilai Metode Seluruh Gambar 10×10 (gambar bersih + overlay grid bernomor, prompt senior analyst).
+- Fallback: bila tidak tepat 4 plat → dibagi 4 kolom sama rata; tombol Deteksi Ulang.
+- Form: No. Urut, Durasi, Sample 1–4 kode manual; kotak merah bernomor bisa diklik inspector; reset ke AI.
+- Endpoint: POST /api/salt-spray/observations/detect/start, GET /api/salt-spray/observations/detect/jobs/{id}; CRUD /api/salt-spray/observations (photo_path + plates[4]).
+- Tipe S/D & prefix dihapus; kartu format lama di-soft-delete saat startup. Export PDF menampilkan foto + 4 overlay plat.
