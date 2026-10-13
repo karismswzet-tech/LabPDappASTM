@@ -953,6 +953,30 @@ DKA_CATEGORIES = [
 ]
 DKA_MAP = {c["code"].lower(): c for c in DKA_CATEGORIES}
 
+# Deskripsi penjelasan standar per kategori — dipakai saat inspector mengoreksi rating secara manual.
+DKA_MANUAL_SUMMARY = {
+    "CLEAR": "Tabung bening/jernih tanpa endapan yang terlihat; permukaan kaca bersih sesuai tabung referensi CLEAR. Kinerja deposit control sangat baik.",
+    "Aspect 1": "Terdapat endapan ringan berwarna amber/cokelat muda pada dinding tabung, sesuai tabung referensi Aspect 1. Deposit masih tergolong ringan.",
+    "Aspect 2": "Terdapat endapan sedang–berat berwarna cokelat gelap pada dinding tabung, sesuai tabung referensi Aspect 2. Deposit cukup signifikan dan perlu perhatian.",
+    "Aspect 3": "Terdapat endapan berat berwarna hitam pekat yang menutupi dinding tabung, sesuai tabung referensi Aspect 3. Deposit sangat berat / kinerja buruk.",
+}
+
+
+def _dka_summary_matches(text: Optional[str], code: str) -> bool:
+    """False bila teks AI menyebut kategori lain (mis. data lama yang ratingnya sudah diedit
+    sebelum fitur ini sehingga deskripsinya tidak sinkron)."""
+    t = str(text or "").lower()
+    if not t.strip():
+        return False
+    mentioned = {c["code"] for c in DKA_CATEGORIES if c["code"].lower() in t}
+    return not mentioned or mentioned == {code}
+
+
+def dka_manual_summary(code: str, ai_code: Optional[str]) -> str:
+    base = DKA_MANUAL_SUMMARY.get(code) or DKA_MAP.get(str(code).lower(), {}).get("description", "")
+    note = f" (Dikoreksi manual oleh inspector dari {ai_code} menjadi {code}.)" if ai_code and ai_code != code else " (Dikoreksi manual oleh inspector.)"
+    return base + note
+
 
 def dka_category_for(v) -> dict:
     s = str(v or "").strip().lower()
@@ -1106,6 +1130,11 @@ class DkaSample(BaseModel):
     confidence: float = 0
     summary: str = ""
     crop_path: str = ""
+    # Hasil asli AI disimpan saat pertama kali rating dikoreksi manual, supaya
+    # deskripsi AI bisa dipulihkan bila rating dikembalikan ke hasil AI.
+    ai_rating: Optional[str] = None
+    ai_summary: Optional[str] = None
+    rating_source: str = "ai"  # "ai" | "manual"
 
 
 class DkaAnalyzeRequest(DkaMeta):
@@ -1245,10 +1274,21 @@ async def dka_update(test_id: str, upd: DkaUpdate):
                 s.sample_id = change.sample_id.strip() or s.sample_id
             if change.rating is not None:
                 cat = dka_category_for(change.rating)
+                if cat["code"] == s.rating:
+                    continue
+                if s.ai_rating is None:  # first manual edit -> remember the AI result
+                    s.ai_rating = s.rating
+                    s.ai_summary = s.summary
                 s.rating = cat["code"]
                 s.severity = cat["severity"]
                 s.color = cat["color"]
                 s.description = cat["description"]
+                if cat["code"] == s.ai_rating and _dka_summary_matches(s.ai_summary, cat["code"]):
+                    s.summary = s.ai_summary or ""
+                    s.rating_source = "ai"
+                else:
+                    s.summary = dka_manual_summary(cat["code"], s.ai_rating)
+                    s.rating_source = "manual"
     await db.dka_tests.update_one(
         {"id": test_id},
         {"$set": {"samples": [s.model_dump() for s in record.samples], "edited": True, "edited_at": now_iso()}},

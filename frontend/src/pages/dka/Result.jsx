@@ -50,6 +50,11 @@ const SampleEditor = ({ sample, colorFor, busy, onRating, onSaveId }) => {
           );
         })}
       </div>
+      {sample.rating_source === "manual" && (
+        <div className="mt-3 inline-flex items-center gap-2 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-bold tracking-wider text-amber-300" data-testid={`dka-manual-badge-${sample.index}`}>
+          DIKOREKSI MANUAL{sample.ai_rating ? ` · AI: ${sample.ai_rating}` : ""}
+        </div>
+      )}
       {!!sample.summary && <p className="mt-3 font-mono text-[12px] leading-5 text-zinc-200" data-testid={`dka-summary-${sample.index}`}>{sample.summary}</p>}
     </Card>
   );
