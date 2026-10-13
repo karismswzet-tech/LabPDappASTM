@@ -972,10 +972,8 @@ def _dka_summary_matches(text: Optional[str], code: str) -> bool:
     return not mentioned or mentioned == {code}
 
 
-def dka_manual_summary(code: str, ai_code: Optional[str]) -> str:
-    base = DKA_MANUAL_SUMMARY.get(code) or DKA_MAP.get(str(code).lower(), {}).get("description", "")
-    note = f" (Dikoreksi manual oleh inspector dari {ai_code} menjadi {code}.)" if ai_code and ai_code != code else " (Dikoreksi manual oleh inspector.)"
-    return base + note
+def dka_manual_summary(code: str, ai_code: Optional[str] = None) -> str:
+    return DKA_MANUAL_SUMMARY.get(code) or DKA_MAP.get(str(code).lower(), {}).get("description", "")
 
 
 def dka_category_for(v) -> dict:
