@@ -1,5 +1,6 @@
 import { fileUrl, imageToDataUri } from "@/lib/kht/api";
 import { buildReport, durationText, fmtHour, HEADER_DEFAULTS } from "@/lib/saltspray/obsReport";
+import { progressChartHtml } from "@/lib/saltspray/obsChartSvg";
 
 export { printHtmlOnWeb } from "@/lib/kht/pdf";
 
@@ -35,12 +36,17 @@ const styles = `
   table.hdr { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-bottom: 10px; }
   table.hdr td { border: 1px solid #bbb; padding: 4px 6px; vertical-align: top; }
   table.hdr td.k { background: #f4f4f5; font-weight: 600; width: 22%; }
-  table.rep { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 16px; }
+  table.rep { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 8px; }
   table.rep th, table.rep td { border: 1px solid #999; padding: 3px 2px; text-align: center; }
   table.rep th { background: #e4e4e7; }
   table.rep td.s { text-align: left; font-weight: 700; padding-left: 5px; white-space: nowrap; }
   table.rep td.r { color: #DC2626; font-weight: 700; }
   .page-break { break-before: page; }
+  .chart { break-inside: avoid; page-break-inside: avoid; margin-top: 2px; }
+  .chart svg { border: 1px solid #e4e4e7; }
+  .legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; font-size: 9.5px; margin-top: 4px; }
+  .legend .lg { display: inline-flex; align-items: center; gap: 4px; font-weight: 700; }
+  .legend .lg i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; }
 `;
 
 function headerHtml(h, report) {
@@ -91,7 +97,7 @@ export async function buildObservationsHtml(cards, header = {}, report = null) {
       ${codes ? `<div class="gc">${codes}</div>` : ""}
     </div>`);
   }
-  const page1 = `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10.</div>${headerHtml(header, rep)}${reportHtml(rep)}`;
+  const page1 = `<div class="doc-title">Salt Spray ASTM B117 — Kartu Pengamatan</div><div class="doc-sub">Metode Seluruh Gambar: tiap plat = active zone, dibagi rata 10×10.</div>${headerHtml(header, rep)}${reportHtml(rep)}${progressChartHtml(rep)}`;
   const gallery = cells.length ? `<div class="gal-page"><div class="sec">FOTO KARTU PENGAMATAN</div><div class="gal" style="grid-template-columns:repeat(${cols},minmax(0,1fr))">${cells.join("")}</div></div>` : "";
   const body = `<table class="pp"><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot><tbody><tr><td>${page1}${gallery}</td></tr></tbody></table>`;
   return wrap("Salt Spray — Kartu Pengamatan", body);
