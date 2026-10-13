@@ -617,8 +617,8 @@ async def _handle_upload(raw: bytes) -> dict:
     except UnsupportedImage:
         raise HTTPException(status_code=400, detail=_UNSUPPORTED_DETAIL)
     except Exception as e:
-        logger.exception("upload failed")
-        raise HTTPException(status_code=502, detail=f"Storage upload failed: {e}")
+        logger.exception("upload failed: %s", e)
+        raise HTTPException(status_code=502, detail="Gagal menyimpan foto ke storage. Silakan coba unggah lagi.")
 
 
 def _ensure_browser_safe(content: bytes, content_type: str) -> tuple:

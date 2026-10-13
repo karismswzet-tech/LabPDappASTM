@@ -276,3 +276,11 @@ Testing agent iteration_6.json: 20/20 pass. Confirmed: login sets HttpOnly cooki
 - Kartu Pengamatan: banner "Selesaikan & Simpan ke History" saat semua sample 100%; panel progress + "Hentikan & Arsipkan Seri" (force, peringatan) bila belum.
 - Backend: POST /api/salt-spray/observation-series/complete {force,note}, GET list, GET /{id} (+cards), DELETE /{id}, POST /{id}/reopen (409 jika ada kartu aktif), GET active-summary. Kartu arsip ditandai series_id (read-only, PUT 409). Header baru: kondisi chamber dibawa, operator/jam-tanggal mulai/grinding dikosongkan.
 - Frontend: tab History Pengamatan (stats, search, kartu seri dgn cover) + detail (header view, tabel, kurva recharts, galeri + lightbox, export PDF, buka kembali, hapus).
+
+## Auto Image Compression (2026-10)
+- All photo uploads (every module, shared /api/kht/upload + chunk/finish) are compressed automatically:
+  stored/display photo = max 1200px longest side, JPEG q85, PNG/HEIC/WEBP -> JPEG (transparent -> white).
+- Hidden AI master copy (2000px, q90) at elastech-kht/uploads-ai/<name>; get_source_object() feeds AI Vision & sample crops
+  (fallback to display photo for older uploads). Upload response: original_bytes, stored_bytes, width, height.
+- Frontend uploadImage() shows toast "Compressed: X → Y" (+ "Saved as JPEG WxHpx · quality 85%").
+- put_object retries on transient storage 5xx. Tests: backend/tests/test_upload_compression.py, test_upload_ai_roundtrip.py.
