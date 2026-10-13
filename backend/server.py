@@ -199,21 +199,24 @@ def init_storage(force: bool = False):
 
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
+    import time as _time
     key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
-    )
-    if resp.status_code == 404:
-        key = init_storage(force=True)
+    resp = None
+    for attempt in range(3):
         resp = requests.put(
             f"{STORAGE_URL}/objects/{path}",
             headers={"X-Storage-Key": key, "Content-Type": content_type},
             data=data,
             timeout=120,
         )
+        if resp.status_code == 404:
+            key = init_storage(force=True)
+            continue
+        if resp.status_code >= 500 and attempt < 2:
+            # object store kadang 500/503 sesaat -> coba lagi
+            _time.sleep(0.8 * (attempt + 1))
+            continue
+        break
     resp.raise_for_status()
     return resp.json()
 
@@ -497,7 +500,15 @@ def _clamp(v, lo, hi, default=0.0):
 def _scale_image(content: bytes, max_side: int, quality: int = 85) -> bytes:
     """Resize (max side) + re-encode as JPEG. Raises on invalid images."""
     im = PILImage.open(io.BytesIO(content))
-    im = ImageOps.exif_transpose(im).convert("RGB")
+    im = ImageOps.exif_transpose(im)
+    if im.mode in ("RGBA", "LA", "P"):
+        # PNG/GIF transparan -> latar putih (convert langsung bikin area transparan jadi hitam)
+        rgba = im.convert("RGBA")
+        bg = PILImage.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])
+        im = bg
+    else:
+        im = im.convert("RGB")
     w, h = im.size
     scale = max(w, h) / float(max_side)
     if scale > 1:
@@ -524,18 +535,90 @@ class UnsupportedImage(Exception):
     """Bytes yang diunggah bukan gambar yang bisa dibaca Pillow."""
 
 
-def _compress_upload(content: bytes, max_side: int = 2200, quality: int = 85) -> bytes:
-    """Selalu simpan sebagai JPEG yang valid.
+# Aturan kompresi upload foto (berlaku untuk SEMUA modul — semua lewat /api/kht/upload):
+#  - foto utama (ditampilkan, PDF): sisi terpanjang maks 1200px, JPEG quality 85, PNG -> JPEG
+#  - salinan analisa tersembunyi (hanya dipakai AI Vision & crop sampel): maks 2000px, JPEG 90,
+#    supaya foto multi-sampel (DKA 4 tabung, Copper batch, Salt Spray 4 plat) tetap tajam untuk AI.
+UPLOAD_MAX_SIDE = 1200
+UPLOAD_JPEG_QUALITY = 85
+AI_MASTER_MAX_SIDE = 2000
+AI_MASTER_QUALITY = 90
+UPLOAD_PREFIX = f"{APP_NAME}/uploads/"
+AI_MASTER_PREFIX = f"{APP_NAME}/uploads-ai/"
 
-    Sebelumnya fungsi ini mengembalikan byte asli saat decoding gagal, sehingga
-    foto HEIC dari HP tersimpan mentah tapi diberi nama .jpg -> foto tidak muncul
-    di halaman maupun di export PDF. Sekarang kegagalan decoding ditolak eksplisit.
+
+def _compress_upload(content: bytes, max_side: int = UPLOAD_MAX_SIDE, quality: int = UPLOAD_JPEG_QUALITY) -> bytes:
+    """Selalu simpan sebagai JPEG yang valid (PNG/HEIC/WEBP dikonversi ke JPEG).
+
+    Kegagalan decoding ditolak eksplisit (bukan disimpan mentah) supaya foto HEIC
+    yang tak terbaca tidak tersimpan sebagai .jpg rusak.
     """
     try:
         return _scale_image(content, max_side, quality)
     except Exception as e:
         logger.warning("upload compression failed (%s): %s", type(e).__name__, e)
         raise UnsupportedImage(str(e)) from e
+
+
+def _ai_master_path(path: str) -> Optional[str]:
+    p = str(path or "")
+    return AI_MASTER_PREFIX + p[len(UPLOAD_PREFIX):] if p.startswith(UPLOAD_PREFIX) else None
+
+
+def get_source_object(path: str):
+    """Ambil foto untuk ANALISA AI / crop sampel: pakai salinan analisa resolusi tinggi bila ada,
+    fallback ke foto utama (upload lama sebelum fitur ini tidak punya salinan analisa)."""
+    master = _ai_master_path(path)
+    if master:
+        try:
+            return get_object(master)
+        except Exception:
+            pass
+    return get_object(path)
+
+
+def _store_compressed_upload(raw: bytes) -> dict:
+    """Sync (threadpool): kompres + simpan foto utama dan salinan analisa. Raise UnsupportedImage."""
+    display = _compress_upload(raw)
+    try:
+        master = _scale_image(raw, AI_MASTER_MAX_SIDE, AI_MASTER_QUALITY)
+    except Exception:
+        master = None
+    with PILImage.open(io.BytesIO(display)) as probe:
+        width, height = probe.size
+    name = f"{uuid.uuid4()}.jpg"
+    path = UPLOAD_PREFIX + name
+    result = put_object(path, display, "image/jpeg")
+    if master:
+        try:
+            put_object(AI_MASTER_PREFIX + name, master, "image/jpeg")
+        except Exception:
+            logger.warning("AI master copy upload failed; analysis will use the 1200px photo")
+    return {
+        "image_path": result.get("path", path),
+        "original_bytes": len(raw),
+        "stored_bytes": len(display),
+        "width": width,
+        "height": height,
+        "format": "jpeg",
+        "quality": UPLOAD_JPEG_QUALITY,
+    }
+
+
+_UNSUPPORTED_DETAIL = (
+    "Format foto tidak didukung atau file rusak. Coba ambil ulang foto, atau ubah "
+    "pengaturan kamera HP ke JPEG (iPhone: Settings > Camera > Formats > Most Compatible)."
+)
+
+
+async def _handle_upload(raw: bytes) -> dict:
+    try:
+        return await run_in_threadpool(_store_compressed_upload, raw)
+    except UnsupportedImage:
+        raise HTTPException(status_code=400, detail=_UNSUPPORTED_DETAIL)
+    except Exception as e:
+        logger.exception("upload failed")
+        raise HTTPException(status_code=502, detail=f"Storage upload failed: {e}")
 
 
 def _ensure_browser_safe(content: bytes, content_type: str) -> tuple:
@@ -632,7 +715,7 @@ def _build_record(req: AnalyzeRequest, ai: dict) -> TestRecord:
 
 async def _analyze_to_record(req: AnalyzeRequest) -> TestRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content)
@@ -653,26 +736,7 @@ async def upload_image(file: UploadFile = File(...)):
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="File foto kosong. Silakan pilih foto lagi.")
-    try:
-        data = await run_in_threadpool(_compress_upload, data)
-    except UnsupportedImage:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Format foto tidak didukung atau file rusak. Coba ambil ulang foto, atau ubah "
-                "pengaturan kamera HP ke JPEG (iPhone: Settings > Camera > Formats > Most Compatible)."
-            ),
-        )
-    # Selalu JPEG setelah kompresi, apa pun format aslinya (termasuk HEIC dari HP).
-    ext = "jpg"
-    content_type = "image/jpeg"
-    path = f"{APP_NAME}/uploads/{uuid.uuid4()}.{ext}"
-    try:
-        result = await run_in_threadpool(put_object, path, data, content_type)
-    except Exception as e:
-        logger.exception("upload failed")
-        raise HTTPException(status_code=502, detail=f"Storage upload failed: {e}")
-    return {"image_path": result.get("path", path)}
+    return await _handle_upload(data)
 
 
 _chunk_buffers: Dict[str, dict] = {}
@@ -713,26 +777,7 @@ async def upload_finish(f: ChunkFinish):
     if len(buf["parts"]) != buf["total"]:
         raise HTTPException(status_code=400, detail=f"Missing chunks: {len(buf['parts'])}/{buf['total']}")
     data = b"".join(buf["parts"][i] for i in range(buf["total"]))
-    try:
-        data = await run_in_threadpool(_compress_upload, data)
-    except UnsupportedImage:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Format foto tidak didukung atau file rusak. Coba ambil ulang foto, atau ubah "
-                "pengaturan kamera HP ke JPEG (iPhone: Settings > Camera > Formats > Most Compatible)."
-            ),
-        )
-    # Selalu JPEG setelah kompresi, apa pun format aslinya (termasuk HEIC dari HP).
-    ext = "jpg"
-    content_type = "image/jpeg"
-    path = f"{APP_NAME}/uploads/{uuid.uuid4()}.{ext}"
-    try:
-        result = await run_in_threadpool(put_object, path, data, content_type)
-    except Exception as e:
-        logger.exception("chunked upload failed")
-        raise HTTPException(status_code=502, detail=f"Storage upload failed: {e}")
-    return {"image_path": result.get("path", path)}
+    return await _handle_upload(data)
 
 
 @api_router.get("/kht/files/{path:path}")
@@ -779,7 +824,7 @@ async def _run_job(job_id: str, req: AnalyzeRequest):
 @api_router.post("/kht/analyze/start", response_model=AnalyzeJob)
 async def analyze_start(req: AnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = AnalyzeJob()
@@ -1093,7 +1138,7 @@ class DkaUpdate(BaseModel):
 
 async def _analyze_dka(req: DkaAnalyzeRequest) -> DkaRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -1145,7 +1190,7 @@ async def _run_dka_job(job_id: str, req: DkaAnalyzeRequest):
 @api_router.post("/dka/analyze/start", response_model=DkaJob)
 async def dka_analyze_start(req: DkaAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = DkaJob()
@@ -1676,7 +1721,7 @@ def _build_copper_record(req: CopperAnalyzeRequest, ai: dict) -> CopperRecord:
 
 async def _analyze_copper(req: CopperAnalyzeRequest) -> CopperRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content)
@@ -1753,7 +1798,7 @@ def _build_copper_batch_records(content: bytes, raw: list, req: CopperBatchAnaly
 
 async def _analyze_copper_batch(req: CopperBatchAnalyzeRequest, batch_id: str) -> list:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -1804,7 +1849,7 @@ async def _run_copper_batch_job(job_id: str, batch_id: str, req: CopperBatchAnal
 
 async def _run_copper_batch_ocr_job(job_id: str, image_path: str):
     try:
-        content, _ = await run_in_threadpool(get_object, image_path)
+        content, _ = await run_in_threadpool(get_source_object, image_path)
         small = await run_in_threadpool(_downscale_for_ai, content, 2200)
         b64 = base64.b64encode(small).decode("utf-8")
         ai = await run_copper_batch_ocr(b64)
@@ -1859,7 +1904,7 @@ async def _run_copper_job(job_id: str, req: CopperAnalyzeRequest):
 @api_router.post("/copper/analyze/start", response_model=CopperJob)
 async def copper_analyze_start(req: CopperAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = CopperJob()
@@ -1880,7 +1925,7 @@ async def copper_job_status(job_id: str):
 @api_router.post("/copper/batch/analyze/start", response_model=CopperBatchJob)
 async def copper_batch_analyze_start(req: CopperBatchAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     batch_id = req.batch_id.strip() or f"CU-BATCH-{uuid.uuid4().hex[:8].upper()}"
@@ -1901,7 +1946,7 @@ async def copper_batch_job_status(job_id: str):
 @api_router.post("/copper/batch/ocr/start", response_model=CopperBatchOcrJob)
 async def copper_batch_ocr_start(req: CopperBatchOcrRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = CopperBatchOcrJob()
@@ -1993,7 +2038,7 @@ async def copper_recrop(test_id: str, req: CopperCropRequest):
     x, y, w, h = [max(0.0, min(1.0, float(v))) for v in req.bbox]
     w, h = min(w, 1 - x), min(h, 1 - y)
     try:
-        content, _ = await run_in_threadpool(get_object, doc["image_path"])
+        content, _ = await run_in_threadpool(get_source_object, doc["image_path"])
         crop_bytes = await run_in_threadpool(_crop_bbox, content, [x, y, w, h], 0.0)
     except ValueError:
         raise HTTPException(status_code=400, detail="Area crop terlalu kecil")
@@ -2010,7 +2055,7 @@ async def copper_rerate(test_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Test not found")
     try:
-        content, _ = await run_in_threadpool(get_object, doc.get("crop_path") or doc["image_path"])
+        content, _ = await run_in_threadpool(get_source_object, doc.get("crop_path") or doc["image_path"])
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content)
@@ -2371,7 +2416,7 @@ def _build_rust_record(req: RustAnalyzeRequest, ai: dict) -> RustRecord:
 
 async def _analyze_rust(req: RustAnalyzeRequest) -> RustRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -2402,7 +2447,7 @@ async def rust_analyze_start(req: RustAnalyzeRequest):
     if not (req.image_path or "").strip():
         raise HTTPException(status_code=400, detail="image_path wajib diisi — unggah foto terlebih dahulu")
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = RustJob()
@@ -2500,7 +2545,7 @@ async def rust_locate_grid(test_id: str):
     if not (RustRecord(**doc).method_results.get("zone")):
         raise HTTPException(status_code=400, detail="Metode Active Zone belum dianalisa untuk inspeksi ini.")
     try:
-        content, _ = await run_in_threadpool(get_object, doc["image_path"])
+        content, _ = await run_in_threadpool(get_source_object, doc["image_path"])
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -2560,7 +2605,7 @@ async def _run_rust_method_job(job_id: str, test_id: str, method: str):
         if not doc:
             raise HTTPException(status_code=404, detail="Rust inspection not found")
         try:
-            content, _ = await run_in_threadpool(get_object, doc["image_path"])
+            content, _ = await run_in_threadpool(get_source_object, doc["image_path"])
         except Exception:
             raise HTTPException(status_code=404, detail="Image not found in storage")
         small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -2783,7 +2828,7 @@ def _build_humidity_record(req: HumidityAnalyzeRequest, ai: dict) -> HumidityRec
 
 async def _analyze_humidity(req: HumidityAnalyzeRequest) -> HumidityRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -2812,7 +2857,7 @@ async def _run_humidity_job(job_id: str, req: HumidityAnalyzeRequest):
 @api_router.post("/humidity/analyze/start", response_model=HumidityJob)
 async def humidity_analyze_start(req: HumidityAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = HumidityJob()
@@ -3090,7 +3135,7 @@ def _build_dip_record(req: DipAnalyzeRequest, ai: dict) -> DipRecord:
 
 async def _analyze_dip(req: DipAnalyzeRequest) -> DipRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -3119,7 +3164,7 @@ async def _run_dip_job(job_id: str, req: DipAnalyzeRequest):
 @api_router.post("/diptest/analyze/start", response_model=DipJob)
 async def dip_analyze_start(req: DipAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = DipJob()
@@ -3525,7 +3570,7 @@ def _build_salt_record(req: SaltAnalyzeRequest, ai: dict) -> SaltRecord:
 
 async def _analyze_salt(req: SaltAnalyzeRequest) -> SaltRecord:
     try:
-        content, _ = await run_in_threadpool(get_object, req.image_path)
+        content, _ = await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -3554,7 +3599,7 @@ async def _run_salt_job(job_id: str, req: SaltAnalyzeRequest):
 @api_router.post("/salt-spray/analyze/start", response_model=SaltJob)
 async def salt_analyze_start(req: SaltAnalyzeRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = SaltJob()
@@ -3652,7 +3697,7 @@ async def salt_locate_grid(test_id: str):
     if not (SaltRecord(**doc).method_results.get("zone")):
         raise HTTPException(status_code=400, detail="Metode Active Zone belum dianalisa untuk inspeksi ini.")
     try:
-        content, _ = await run_in_threadpool(get_object, doc["image_path"])
+        content, _ = await run_in_threadpool(get_source_object, doc["image_path"])
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -3712,7 +3757,7 @@ async def _run_salt_method_job(job_id: str, test_id: str, method: str):
         if not doc:
             raise HTTPException(status_code=404, detail="Rust inspection not found")
         try:
-            content, _ = await run_in_threadpool(get_object, doc["image_path"])
+            content, _ = await run_in_threadpool(get_source_object, doc["image_path"])
         except Exception:
             raise HTTPException(status_code=404, detail="Image not found in storage")
         small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -4022,7 +4067,7 @@ async def _run_obs_detect_job(job_id: str, photo_path: str):
         await db.salt_obs_jobs.update_one({"id": job_id}, {"$set": {"stage": text}})
     try:
         try:
-            content, _ = await run_in_threadpool(get_object, photo_path)
+            content, _ = await run_in_threadpool(get_source_object, photo_path)
         except Exception:
             raise HTTPException(status_code=404, detail="Foto tidak ditemukan di storage")
         small = await run_in_threadpool(_downscale_for_ai, content, 2200)
@@ -4066,7 +4111,7 @@ async def _run_obs_detect_job(job_id: str, photo_path: str):
 @api_router.post("/salt-spray/observations/detect/start", response_model=SaltObsJob)
 async def salt_obs_detect_start(req: SaltObsDetectRequest):
     try:
-        await run_in_threadpool(get_object, req.photo_path)
+        await run_in_threadpool(get_source_object, req.photo_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Foto tidak ditemukan di storage")
     job = SaltObsJob(photo_path=req.photo_path)
@@ -4859,7 +4904,7 @@ class HtcbtOcrJob(BaseModel):
 
 async def _run_htcbt_ocr_job(job_id: str, image_path: str):
     try:
-        content, _ = await run_in_threadpool(get_object, image_path)
+        content, _ = await run_in_threadpool(get_source_object, image_path)
         small = await run_in_threadpool(_downscale_for_ai, content)
         b64 = base64.b64encode(small).decode("utf-8")
         ai = await run_htcbt_ocr(b64)
@@ -4905,7 +4950,7 @@ async def _run_htcbt_ocr_job(job_id: str, image_path: str):
 @api_router.post("/htcbt/ocr/start", response_model=HtcbtOcrJob)
 async def htcbt_ocr_start(req: HtcbtOcrRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = HtcbtOcrJob()
@@ -4994,7 +5039,7 @@ def _num_or_none(v):
 
 async def _run_label_ocr_job(job_id: str, image_path: str, collection, context: str, hint_temp: str, hint_dur: str):
     try:
-        content, _ = await run_in_threadpool(get_object, image_path)
+        content, _ = await run_in_threadpool(get_source_object, image_path)
         small = await run_in_threadpool(_downscale_for_ai, content)
         b64 = base64.b64encode(small).decode("utf-8")
         ai = await run_label_ocr(b64, context, hint_temp, hint_dur)
@@ -5020,7 +5065,7 @@ async def _run_label_ocr_job(job_id: str, image_path: str, collection, context: 
 
 async def _label_ocr_start(req: LabelOcrRequest, collection, context: str, hint_temp: str, hint_dur: str) -> LabelOcrJob:
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = LabelOcrJob()
@@ -5463,7 +5508,7 @@ async def _dkacec_active_doc() -> Optional[dict]:
 
 async def _run_dkacec_ocr_job(job_id: str, image_path: str):
     try:
-        content, _ = await run_in_threadpool(get_object, image_path)
+        content, _ = await run_in_threadpool(get_source_object, image_path)
         small = await run_in_threadpool(_downscale_for_ai, content)
         b64 = base64.b64encode(small).decode("utf-8")
         ai = await run_dkacec_ocr(b64)
@@ -5508,7 +5553,7 @@ async def _run_dkacec_ocr_job(job_id: str, image_path: str):
 @api_router.post("/dkacec/ocr/start", response_model=DkacecOcrJob)
 async def dkacec_ocr_start(req: DkacecOcrRequest):
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = DkacecOcrJob()
@@ -5609,7 +5654,7 @@ async def run_dkacec_runhours_ocr(image_b64: str) -> dict:
 
 async def _run_dkacec_runhours_job(job_id: str, image_path: str):
     try:
-        content, _ = await run_in_threadpool(get_object, image_path)
+        content, _ = await run_in_threadpool(get_source_object, image_path)
         small = await run_in_threadpool(_downscale_for_ai, content)
         b64 = base64.b64encode(small).decode("utf-8")
         ai = await run_dkacec_runhours_ocr(b64)
@@ -5654,7 +5699,7 @@ async def dkacec_runhours_start(req: DkacecOcrRequest):
     if not (req.image_path or "").strip():
         raise HTTPException(status_code=400, detail="image_path wajib diisi.")
     try:
-        await run_in_threadpool(get_object, req.image_path)
+        await run_in_threadpool(get_source_object, req.image_path)
     except Exception:
         raise HTTPException(status_code=404, detail="Image not found in storage")
     job = DkacecOcrJob()

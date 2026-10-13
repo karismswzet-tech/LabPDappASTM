@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { API } from "@/lib/api";
 
 export const KHT = `${API}/kht`;
@@ -43,19 +44,56 @@ export const useTest = (id) => useQuery({ queryKey: ["kht", "test", id], queryFn
 export const useTrend = () => useQuery({ queryKey: ["kht", "trend"], queryFn: () => getJSON(`${KHT}/trend`) });
 export const useColorScale = () => useQuery({ queryKey: ["kht", "color-scale"], queryFn: () => getJSON(`${KHT}/color-scale`) });
 
+// Client-side pre-pass: shrink huge camera photos & convert PNG/WEBP -> JPEG so uploads are fast.
+// 2000px is kept on purpose: the server stores the 1200px/85% display photo PLUS a 2000px
+// analysis copy (AI Vision + per-sample crops), so AI accuracy is not reduced.
 async function downscaleBlob(blob, maxSide = 2000) {
   try {
     const bmp = await createImageBitmap(blob);
-    const scale = Math.max(bmp.width, bmp.height) / maxSide;
-    if (scale <= 1) return blob;
+    const scale = Math.max(1, Math.max(bmp.width, bmp.height) / maxSide);
+    if (scale === 1 && blob.type === "image/jpeg") { bmp.close?.(); return blob; }
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bmp.width / scale);
     canvas.height = Math.round(bmp.height / scale);
-    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff"; // transparent PNG -> white background
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close?.();
     const out = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
     return out ?? blob;
   } catch {
     return blob;
+  }
+}
+
+export function formatBytes(n) {
+  const b = Number(n) || 0;
+  if (b >= 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)}MB`;
+  if (b >= 1024) return `${Math.round(b / 1024)}KB`;
+  return `${b}B`;
+}
+
+// Last compression result per stored path (for any UI that wants to show it again).
+export const uploadStats = new Map();
+
+function reportCompression(originalBytes, info) {
+  if (!info?.image_path) return;
+  const stats = {
+    originalBytes,
+    storedBytes: info.stored_bytes,
+    width: info.width,
+    height: info.height,
+    label: `Compressed: ${formatBytes(originalBytes)} → ${formatBytes(info.stored_bytes)}`,
+  };
+  uploadStats.set(info.image_path, stats);
+  try { window.dispatchEvent(new CustomEvent("photo-compressed", { detail: { path: info.image_path, ...stats } })); } catch { /* SSR-safe */ }
+  if (info.stored_bytes) {
+    toast.success(stats.label, {
+      id: `compress-${info.image_path}`,
+      description: info.width ? `Saved as JPEG ${info.width}×${info.height}px · quality ${info.quality || 85}%` : undefined,
+      duration: 6000,
+    });
   }
 }
 
@@ -85,7 +123,7 @@ async function uploadInChunks(blob, ext) {
     }
     throw new Error(`Upload finish failed: ${fin.status} ${await fin.text()}`);
   }
-  return (await fin.json()).image_path;
+  return fin.json();
 }
 
 export async function uploadImage(uri) {
@@ -93,12 +131,17 @@ export async function uploadImage(uri) {
   const ext = clean.endsWith(".png") ? "png" : "jpg";
   const name = `tube_${Date.now()}.${ext}`;
   let blob = await (await fetch(uri)).blob();
+  const originalBytes = blob.size;
   blob = await downscaleBlob(blob);
   try {
     const form = new FormData();
     form.append("file", blob, name);
     const res = await fetch(`${KHT}/upload`, { method: "POST", body: form });
-    if (res.ok) return (await res.json()).image_path;
+    if (res.ok) {
+      const info = await res.json();
+      reportCompression(originalBytes, info);
+      return info.image_path;
+    }
     if (res.status === 400) {
       // Server menolak foto (format tidak didukung / file rusak) — tampilkan pesannya.
       let detail = "";
@@ -109,7 +152,9 @@ export async function uploadImage(uri) {
   } catch (e) {
     if (!(e instanceof TypeError) && !String(e?.message).includes("413")) throw e;
   }
-  return uploadInChunks(blob, ext);
+  const info = await uploadInChunks(blob, ext);
+  reportCompression(originalBytes, info);
+  return info.image_path;
 }
 
 /**
